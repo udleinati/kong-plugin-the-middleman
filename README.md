@@ -10,6 +10,18 @@ For every incoming request, you might forward the `path`, `host`, `headers` and 
 
 This project was inspered by [kong-external-auth](https://github.com/jcramalho/kong-external-auth "kong-external-auth") and [kong-middleman-plugin](https://github.com/pantsel/kong-middleman-plugin "kong-middleman-plugin").
 
+## Installation
+
+```bash
+$ luarocks install kong-plugin-the-middleman
+```
+
+Update the `plugins` config to add `the-middleman`:
+
+```
+plugins = bundled,the-middleman
+```
+
 ## Use cases
 
 ### Host offloading
