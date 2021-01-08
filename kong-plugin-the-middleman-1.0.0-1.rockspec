@@ -6,6 +6,8 @@ source = {
   tag = "1.0.0",
 }
 
+supported_platforms = {"linux", "macosx"}
+
 description = {
    detailed = "A Kong plugin that enables an extra HTTP POST/GET request - the-middle-request - before proxing to the original request.",
    homepage = "git://github.com/udleinati/kong-plugin-the-middleman",
