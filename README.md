@@ -24,6 +24,8 @@ plugins = bundled,the-middleman
 
 ## Use cases
 
+Check the [playground](https://github.com/udleinati/kong-plugin-the-middleman/tree/master/playground "playground") to see `the-middleman` working.
+
 ### Host offloading
 
 You might need to identify your client by `host` with some custom logic and adding information to the request header. I call this process `host-offloading`. Follow the steps to do it:
@@ -49,12 +51,13 @@ You can add the plugin on top of an API by executing the following request on yo
 ```bash
 $ curl -X POST http://kong:8001/apis/{api}/plugins \
     --data "name=the-middleman" \
-    --data "config.url=http://myservice/auth"
+    --data "config.url=http://myservice"
 ```
 
 | Parameter | default | description |
 | ---       | ---     | ---         |
-| `config.url` | [required] | The name of the plugin to use, in this case: `the-middleman` |
+| `config.url` | [required] | Service where the requests will be made. |
+| `config.path` |  | Path on service where the requests will be made. |
 | `config.method` | POST | Allowed values: `POST` and `GET`. |
 | `config.connect_timeout` | 5000 | Connection timeout (in ms) to the provided url. |
 | `config.send_timeout` | 10000 | Send timeout (in ms) to the provided url. |
@@ -65,10 +68,10 @@ $ curl -X POST http://kong:8001/apis/{api}/plugins \
 | `config.inject_body_response_into_header` | true | Inject `the-middle-request` response into the request header. Note: The response MUST BE a JSON and the property key will be dasherized (kebab-case) |
 | `config.injected_header_prefix` | x- | Prefix to the injected headers. |
 | `config.streamdown_injected_headers` | false | Sreamdown the injected headers. |
-| `config.cache_enabled` | false | Add a cache to middle-request. |
+| `config.cache_enabled` | false | Add a cache to middle-request. When on a header `x-middleman-cache-status` will be added, the value might be *HIT* or *MISS*. |
 | `config.cache_based_on` | host | Allowed values: `host`, `host-path`, `host-path-query` or `header` |
 | `config.cache_based_on_header` | authorization | The header name that will be used to used for cache. Valid jus twhen `cache_based_on` is `header`. |
-| `config.cache_ttl` | 60 | Cache TTL. |
+| `config.cache_ttl` | 60 | TTL |
 
 ## Author
 
