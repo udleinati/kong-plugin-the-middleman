@@ -1,0 +1,117 @@
+version: '3.7'
+
+networks:
+  playground-net:
+    external: false
+
+services:
+  playground-postgres:
+    image: postgres:12
+    environment:
+      POSTGRES_DB: kong
+      POSTGRES_PASSWORD: sql
+    restart: on-failure
+    deploy:
+      restart_policy:
+        condition: on-failure
+    stdin_open: true
+    tty: true
+    networks:
+      - playground-net
+
+  playground-kong-migrations:
+    image: kong:2.2-alpine
+    entrypoint: ["sh", "-c", "kong migrations bootstrap && kong migrations up"]
+    depends_on:
+      - playground-postgres
+    environment:
+      KONG_DATABASE: postgres
+      KONG_PG_HOST: playground-postgres
+      KONG_PG_USER: postgres
+      KONG_PG_PASSWORD: sql
+      KONG_PG_DATABASE: kong
+    restart: on-failure
+    deploy:
+      restart_policy:
+        condition: on-failure
+    networks:
+      - playground-net
+
+  playground-kong:
+    image: kong:2.2-alpine
+    depends_on:
+      - playground-postgres
+    environment:
+      KONG_ADMIN_ACCESS_LOG: /dev/stdout
+      KONG_ADMIN_ERROR_LOG: /dev/stderr
+      KONG_ADMIN_LISTEN: '0.0.0.0:8001'
+      KONG_DATABASE: postgres
+      KONG_PG_DATABASE: kong
+      KONG_PG_HOST: playground-postgres
+      KONG_PG_USER: postgres
+      KONG_PG_PASSWORD: sql
+      KONG_PROXY_ACCESS_LOG: /dev/stdout
+      KONG_PROXY_ERROR_LOG: /dev/stderr
+      KONG_PLUGINS: bundled, the-middleman
+    volumes:
+      - ../kong/plugins/the-middleman:/usr/local/share/lua/5.1/kong/plugins/the-middleman:ro
+    restart: on-failure
+    deploy:
+      restart_policy:
+        condition: on-failure
+    networks:
+      - playground-net
+    ports:
+      - "8000:8000/tcp"
+      - "127.0.0.1:8001:8001/tcp"
+
+  playground-konga:
+    image: pantsel/konga:0.14.9
+    environment:
+      NODE_ENV: development
+      KONGA_HOOK_TIMEOUT: 120000
+      KONGA_SEED_USER_DATA_SOURCE_FILE: /app/user_seed.js
+      KONGA_SEED_KONG_NODE_DATA_SOURCE_FILE: /app/node_seed.js
+    volumes:
+      - ./konga/user_seed.js:/app/user_seed.js:ro
+      - ./konga/node_seed.js:/app/node_seed.js:ro
+    networks:
+      - playground-net
+    ports:
+      - 1337:1337
+
+  playground-destination-service:
+    image: node:14-alpine
+    entrypoint: ["node", "/app/destination-service.js"]
+    environment:
+      PORT: 3200
+    volumes:
+      - ./app/destination-service.js:/app/destination-service.js:ro
+    networks:
+      - playground-net
+    ports:
+      - 3200:3200
+
+  playground-middle-service:
+    image: node:14-alpine
+    entrypoint: ["node", "/app/middle-service.js"]
+    environment:
+      PORT: 3400
+    volumes:
+      - ./app/middle-service.js:/app/middle-service.js:ro
+    networks:
+      - playground-net
+    ports:
+      - 3400:3400
+
+  playground-load:
+    image: node:14-alpine
+    entrypoint: ["node", "/app/_load.js"]
+    volumes:
+      - ./app/_load.js:/app/_load.js:ro
+    restart: on-failure
+    deploy:
+      restart_policy:
+        condition: on-failure
+    networks:
+      - playground-net
