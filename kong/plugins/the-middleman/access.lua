@@ -1,20 +1,37 @@
 local _M = {}
 local http = require "resty.http"
 local json = require "cjson"
+
+local str_gsub, str_upper, str_lower = string.gsub, string.upper, string.lower
 local kong = kong
 local error = error
-local str_gsub = string.gsub
-local str_lower = string.lower
 local md5 = ngx.md5
+
+local function capitalize(str)
+  return (str_gsub(str, '^%l', str_upper))
+end
 
 local function dasherize(str)
   local new_str = str_gsub(str, '(%l)(%u)', '%1-%2')
   new_str = str_gsub(new_str, '%W+', '-')
   new_str = str_lower(new_str)
+  new_str = str_gsub(new_str, '[^-]+', capitalize)
   return new_str
 end
 
 local function external_request(conf, version)
+
+  -- Check if the cache header must be added
+  if conf.cache_enabled then
+    -- Set Header
+    kong.service.request.set_header('X-Middleman-Cache-Status', 'HIT')
+
+    -- stream down the headers
+    if conf.streamdown_injected_headers then
+      kong.response.set_header('X-Middleman-Cache-Status', 'HIT')
+    end
+  end
+
   local httpc = http.new()
   httpc:set_timeouts(conf.connect_timeout, conf.send_timeout, conf.read_timeout)
 
@@ -61,7 +78,7 @@ local function inject_body_response_into_header(conf, response)
   for key, value in pairs(decoded_body) do
     if not value then goto continue end
 
-    local header_name = conf.injected_header_prefix .. dasherize(key)
+    local header_name = dasherize(conf.injected_header_prefix .. key)
     local header_value = value
 
     if type(header_value) == "table" then
@@ -70,9 +87,9 @@ local function inject_body_response_into_header(conf, response)
 
     kong.service.request.set_header(header_name, header_value)
 
-    -- stream down the header
+    -- stream down the headers
     if conf.streamdown_injected_headers then
-      kong.response.add_header(header_name, header_value)
+      kong.response.set_header(header_name, header_value)
     end
 
     :: continue ::
@@ -83,6 +100,14 @@ function _M.execute(conf, version)
   local response, err;
 
   if conf.cache_enabled then
+    -- Set Header
+    kong.service.request.set_header('X-Middleman-Cache-Status', 'MISS')
+
+    -- stream down the headers
+    if conf.streamdown_injected_headers then
+      kong.response.set_header('X-Middleman-Cache-Status', 'MISS')
+    end
+
     local cache_key = kong.request.get_header("host")
 
     if conf.cache_based_on == "host-path" then
