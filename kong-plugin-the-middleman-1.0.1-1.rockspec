@@ -1,9 +1,9 @@
 package = "kong-plugin-the-middleman"
-version = "1.0.0-1"
+version = "1.0.1-1"
 
 source = {
   url = "git://github.com/udleinati/kong-plugin-the-middleman",
-  tag = "1.0.0",
+  tag = "1.0.1",
 }
 
 supported_platforms = {"linux", "macosx"}
