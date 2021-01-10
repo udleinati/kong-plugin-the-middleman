@@ -65,10 +65,10 @@ $ curl -X POST http://kong:8001/apis/{api}/plugins \
 | `config.forward_path` | false | Forward the request path to `the-middle-request` body. |
 | `config.forward_query` | false | Forward the request query to `the-middle-request` body. |
 | `config.forward_body` | false | Forward the request body to `the-middle-request` body. |
-| `config.inject_body_response_into_header` | true | Inject `the-middle-request` response into the request header. Note: The response MUST BE a JSON and the property key will be dasherized (kebab-case) |
+| `config.inject_body_response_into_header` | true | Inject `the-middle-request` response into the request header. Note: The response MUST BE a JSON and the property key will be dasherized (kebab-case).  |
 | `config.injected_header_prefix` | X- | Prefix to the injected headers. |
-| `config.streamdown_injected_headers` | false | Sreamdown the injected headers. |
-| `config.cache_enabled` | false | Add a cache to middle-request. When on a header `x-middleman-cache-status` will be added, the value might be *HIT* or *MISS*. |
+| `config.streamdown_injected_headers` | false | When this option is enabled, `the-middleman` will add to the response header all headers added by `the-middleman` and by the middle-service. |
+| `config.cache_enabled` | false | Add cache to `the-middle-request`. When on a header `x-middleman-cache-status` will be added, the value might be *HIT* or *MISS*. |
 | `config.cache_based_on` | host | Allowed values: `host`, `host-path`, `host-path-query` or `header` |
 | `config.cache_based_on_header` | authorization | The header name that will be used to used for cache. Valid jus twhen `cache_based_on` is `header`. |
 | `config.cache_ttl` | 60 | TTL |
