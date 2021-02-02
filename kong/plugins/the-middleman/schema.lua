@@ -19,6 +19,7 @@ return {
         { forward_path = { type = "boolean", default = false, }, },
         { forward_query = { type = "boolean", default = false, }, },
         { forward_headers = { type = "boolean", default = false, }, },
+        { forward_body = { type = "boolean", default = false, }, },
 
         { inject_body_response_into_header = { type = "boolean", default = true, }, },
         { injected_header_prefix = { type = "string", default = 'X-', }, },

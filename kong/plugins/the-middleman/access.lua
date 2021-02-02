@@ -49,6 +49,10 @@ local function external_request(conf, version)
     body["headers"] = kong.request.get_headers()
   end
 
+  if conf.forward_body then
+    body["body"] = kong.request.get_body()
+  end
+
   local response, err = httpc:request_uri(conf.url, {
     method = conf.method,
     path = conf.path,
