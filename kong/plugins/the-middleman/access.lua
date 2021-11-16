@@ -24,11 +24,11 @@ local function external_request(conf, version)
   -- Check if the cache header must be added
   if conf.cache_enabled then
     -- Set Header
-    kong.service.request.set_header('X-Middleman-Cache-Status', 'HIT')
+    kong.service.request.set_header('X-Middleman-Cache-Status', 'MISS')
 
     -- stream down the headers
     if conf.streamdown_injected_headers then
-      kong.response.set_header('X-Middleman-Cache-Status', 'HIT')
+      kong.response.set_header('X-Middleman-Cache-Status', 'MISS')
     end
   end
 
@@ -105,11 +105,11 @@ function _M.execute(conf, version)
 
   if conf.cache_enabled then
     -- Set Header
-    kong.service.request.set_header('X-Middleman-Cache-Status', 'MISS')
+    kong.service.request.set_header('X-Middleman-Cache-Status', 'HIT')
 
     -- stream down the headers
     if conf.streamdown_injected_headers then
-      kong.response.set_header('X-Middleman-Cache-Status', 'MISS')
+      kong.response.set_header('X-Middleman-Cache-Status', 'HIT')
     end
 
     local cache_key = kong.request.get_header("host")
