@@ -121,8 +121,14 @@ function _M.execute(conf, version)
       cache_key = cache_key .. kong.request.get_path_with_query()
 
     elseif conf.cache_based_on == "header" then
-      cache_key = kong.request.get_header(conf.cache_based_on_header) or "empty"
+      cache_based_on_headers = conf.cache_based_on_headers .. ','
 
+      for cache_based_on_header in cache_based_on_headers:gmatch("(.-),") do
+        if kong.request.get_header(cache_based_on_header) then
+          cache_key = kong.request.get_header(cache_based_on_header)
+          break
+        end
+      end
     end
 
     local cache_ttl = { ttl = conf.cache_ttl }

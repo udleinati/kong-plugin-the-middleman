@@ -3,3 +3,7 @@ servroot
 
 # packed distribution format for LuaRocks
 *.rock
+/luarocks
+/lua
+/lua_modules
+/.luarocks

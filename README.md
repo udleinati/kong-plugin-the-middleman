@@ -70,7 +70,7 @@ $ curl -X POST http://kong:8001/apis/{api}/plugins \
 | `config.streamdown_injected_headers` | false | When this option is enabled, `the-middleman` will add to the response header all headers added by `the-middleman` and by the middle-service. |
 | `config.cache_enabled` | false | Add cache to `the-middle-request`. When on a header `x-middleman-cache-status` will be added, the value might be *HIT* or *MISS*. |
 | `config.cache_based_on` | host | Allowed values: `host`, `host-path`, `host-path-query` or `header` |
-| `config.cache_based_on_header` | authorization | The header name that will be used to used for cache. Valid jus twhen `cache_based_on` is `header`. |
+| `config.cache_based_on_headers` | authorization | The header names that will be used to cache. Valid just when `cache_based_on` is `header`. It is possible to pass more than one header with commma, for example, `header1,header2`, the first header will be prioritized. If it is unavailable, the second one will be cached, and so on. |
 | `config.cache_ttl` | 60 | TTL |
 
 ## Author
