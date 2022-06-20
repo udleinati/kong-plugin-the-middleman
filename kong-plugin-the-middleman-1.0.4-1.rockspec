@@ -16,7 +16,7 @@ description = {
 
 dependencies = {
   "lua >= 5.1",
-  "lua-cjson",
+  "lua-cjson == 2.1.0-1",
   "lua-resty-http >= 0.11",
 }
 
