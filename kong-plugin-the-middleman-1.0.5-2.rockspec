@@ -1,9 +1,9 @@
 package = "kong-plugin-the-middleman"
-version = "1.0.5-1"
+version = "1.0.5-2"
 
 source = {
   url = "git://github.com/udleinati/kong-plugin-the-middleman",
-  tag = "1.0.5-1",
+  tag = "1.0.5-2",
 }
 
 supported_platforms = {"linux", "macosx"}
@@ -16,7 +16,7 @@ description = {
 
 dependencies = {
   "lua >= 5.1",
-  "lua-cjson == 2.1.0-1",
+  "lua-cjson == 2.1.0.6-1",
   "lua-resty-http >= 0.11",
 }
 
