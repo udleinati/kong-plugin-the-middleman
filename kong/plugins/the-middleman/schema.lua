@@ -27,7 +27,7 @@ return {
 
         { cache_enabled = { type = "boolean", default = false, }, },
         { cache_based_on = { type = "string", default = "host", one_of = { "host", "host-path", "host-path-query", "header" }, }, },
-        { cache_based_on_header = { type = "string", default = "authorization", }, },
+        { cache_based_on_headers = { type = "string", default = "authorization", }, },
         { cache_ttl = { type = "number", default = 60, }, },
       },
     }, },
