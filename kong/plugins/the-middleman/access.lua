@@ -70,7 +70,7 @@ local function external_request(conf, version)
     return error(err)
   end
 
-  return { status = response.status, body = response.body }
+  return { status = response.status, body = response.body, headers = response.headers }
 end
 
 local function inject_body_response_into_header(conf, response)
@@ -145,7 +145,7 @@ function _M.execute(conf, version)
 
   -- http error
   if response.status >= 400 then
-    return kong.response.exit(response.status, response.body)
+    return kong.response.exit(response.status, response.body, response.headers)
   end
 
   -- inject the body response into the header
