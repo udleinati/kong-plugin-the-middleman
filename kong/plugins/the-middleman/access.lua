@@ -143,6 +143,11 @@ function _M.execute(conf, version)
     return error(err)
   end
 
+  -- http error
+  if response.status >= 400 then
+    return kong.response.exit(response.status, response.body)
+  end
+
   -- inject the body response into the header
   inject_body_response_into_header(conf, response)
 

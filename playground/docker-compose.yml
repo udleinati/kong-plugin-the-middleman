@@ -20,7 +20,7 @@ services:
       - playground-net
 
   playground-kong-migrations:
-    image: kong:2.2-alpine
+    image: kong:2.8
     entrypoint: ["sh", "-c", "kong migrations bootstrap && kong migrations up"]
     depends_on:
       - playground-postgres
@@ -38,7 +38,7 @@ services:
       - playground-net
 
   playground-kong:
-    image: kong:2.2-alpine
+    image: kong:2.8
     depends_on:
       - playground-postgres
     environment:
@@ -65,28 +65,13 @@ services:
       - "8000:8000/tcp"
       - "127.0.0.1:8001:8001/tcp"
 
-  playground-konga:
-    image: pantsel/konga:0.14.9
-    environment:
-      NODE_ENV: development
-      KONGA_HOOK_TIMEOUT: 120000
-      KONGA_SEED_USER_DATA_SOURCE_FILE: /app/user_seed.js
-      KONGA_SEED_KONG_NODE_DATA_SOURCE_FILE: /app/node_seed.js
-    volumes:
-      - ./konga/user_seed.js:/app/user_seed.js:ro
-      - ./konga/node_seed.js:/app/node_seed.js:ro
-    networks:
-      - playground-net
-    ports:
-      - 1337:1337
-
   playground-destination-service:
     image: node:14-alpine
     entrypoint: ["node", "/app/destination-service.js"]
     environment:
       PORT: 3200
     volumes:
-      - ./app/destination-service.js:/app/destination-service.js:ro
+      - ./app:/app:ro
     networks:
       - playground-net
     ports:
@@ -98,7 +83,7 @@ services:
     environment:
       PORT: 3400
     volumes:
-      - ./app/middle-service.js:/app/middle-service.js:ro
+      - ./app:/app:ro
     networks:
       - playground-net
     ports:
