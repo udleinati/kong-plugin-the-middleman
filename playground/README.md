@@ -4,7 +4,7 @@ Check `the-middleman` working.
 
 ## Description
 
-The docker-composer will start a `postgres`, `kong`, `konga`, `the-middleman`, a example of `middle-service` and a example of `destination-service`.
+The docker-composer will start a `postgres`, `kong`, `the-middleman`, a example of `middle-service` and a example of `destination-service`.
 
 ## Playing
 

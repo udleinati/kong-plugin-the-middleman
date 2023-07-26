@@ -42,9 +42,12 @@ async function load() {
   }, {
     name: 'the-middleman',
     'config.url': 'http://playground-middle-service:3400',
+    'config.forward_headers': true,
     'config.path': '/',
     'config.cache_enabled': true,
-    'config.cache_ttl': 5,
+    'config.cache_based_on': 'header',
+    'config.cache_invalidate_when_streamup_path': ['/invalidatex', '/invalidatey'],
+    'config.cache_ttl': 60,
   });
 
   console.log('Playground on Kong created')

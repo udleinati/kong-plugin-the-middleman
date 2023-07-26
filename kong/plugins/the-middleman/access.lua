@@ -20,7 +20,6 @@ local function dasherize(str)
 end
 
 local function external_request(conf, version)
-
   -- Check if the cache header must be added
   if conf.cache_enabled then
     -- Set Header
@@ -134,6 +133,19 @@ function _M.execute(conf, version)
     local cache_ttl = { ttl = conf.cache_ttl }
     response, err = kong.cache:get(md5(cache_key), cache_ttl, external_request, conf, version)
 
+    -- check if the cache must be invalidated
+    should_invalidate_cache = false
+
+    for k,v in pairs(conf.cache_invalidate_when_streamup_path) do
+      if kong.request.get_path() == v then
+        should_invalidate_cache = true
+        break
+      end
+    end
+
+    if should_invalidate_cache then
+      kong.cache:invalidate(md5(cache_key))
+    end
   else
     response, err = external_request(conf, version)
   end
