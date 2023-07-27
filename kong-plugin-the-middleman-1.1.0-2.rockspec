@@ -25,7 +25,7 @@ build = {
    modules = {
       ["kong.plugins.the-middleman.access"] = "kong/plugins/the-middleman/access.lua",
       ["kong.plugins.the-middleman.handler"] = "kong/plugins/the-middleman/handler.lua",
-      ["kong.plugins.the-middleman.schema"] = "kong/plugins/the-middleman/schema.lua"
+      ["kong.plugins.the-middleman.schema"] = "kong/plugins/the-middleman/schema.lua",
       ["kong.plugins.the-middleman.policies"] = "kong/plugins/the-middleman/policies/init.lua"
    }
 }
