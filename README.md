@@ -74,6 +74,15 @@ $ curl -X POST http://kong:8001/apis/{api}/plugins \
 | `config.cache_based_on_headers` | authorization | The header names that will be used to cache. Valid just when `cache_based_on` is `header`. It is possible to pass more than one header with commma, for example, `header1,header2`, the first header will be prioritized. If it is unavailable, the second one will be cached, and so on. |
 | `config.cache_invalidate_when_streamup_path` | [] | The cache will be invalidate when the request access the `path`. No matter the statuscode that it will return. |
 | `config.cache_ttl` | 60 | TTL |
+| `config.cache_policy` | local | Allowed values: `local` or `redis` |
+| `config.redis_host` |  | Mandatory. |
+| `config.redis_port` | 6379 | |
+| `config.redis_password` | | |
+| `config.redis_username` | | |
+| `config.redis_ssl` | false | |
+| `config.redis_ssl_verify` | false | |
+| `config.redis_timeout` | 2000 | |
+| `config.redis_database` | 0 | |
 
 ## Author
 

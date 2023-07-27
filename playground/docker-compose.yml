@@ -19,9 +19,25 @@ services:
     networks:
       - playground-net
 
+  playground-redis:
+    image: redis:5-alpine
+    restart: on-failure
+    deploy:
+      restart_policy:
+        condition: on-failure
+    networks:
+      - playground-net
+    ports:
+      - "6379:6379/tcp"
+
   playground-kong-migrations:
     image: kong:2.8
-    entrypoint: ["sh", "-c", "kong migrations bootstrap && kong migrations up"]
+    entrypoint:
+      [
+        "sh",
+        "-c",
+        "kong migrations bootstrap && kong migrations up"
+      ]
     depends_on:
       - playground-postgres
     environment:
@@ -67,7 +83,7 @@ services:
 
   playground-destination-service:
     image: node:14-alpine
-    entrypoint: ["node", "/app/destination-service.js"]
+    entrypoint: [ "node", "/app/destination-service.js" ]
     environment:
       PORT: 3200
     volumes:
@@ -79,7 +95,7 @@ services:
 
   playground-middle-service:
     image: node:14-alpine
-    entrypoint: ["node", "/app/middle-service.js"]
+    entrypoint: [ "node", "/app/middle-service.js" ]
     environment:
       PORT: 3400
     volumes:
@@ -91,7 +107,7 @@ services:
 
   playground-load:
     image: node:14-alpine
-    entrypoint: ["node", "/app/_load.js"]
+    entrypoint: [ "node", "/app/_load.js" ]
     volumes:
       - ./app/_load.js:/app/_load.js:ro
     restart: on-failure

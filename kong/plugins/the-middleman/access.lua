@@ -1,3 +1,5 @@
+local policies = require "kong.plugins.the-middleman.policies"
+
 local _M = {}
 local http = require "resty.http"
 local json = require "cjson"
@@ -120,7 +122,7 @@ function _M.execute(conf, version)
       cache_key = cache_key .. kong.request.get_path_with_query()
 
     elseif conf.cache_based_on == "header" then
-      cache_based_on_headers = conf.cache_based_on_headers .. ','
+      local cache_based_on_headers = conf.cache_based_on_headers .. ','
 
       for cache_based_on_header in cache_based_on_headers:gmatch("(.-),") do
         if kong.request.get_header(cache_based_on_header) then
@@ -130,11 +132,19 @@ function _M.execute(conf, version)
       end
     end
 
-    local cache_ttl = { ttl = conf.cache_ttl }
-    response, err = kong.cache:get(md5(cache_key), cache_ttl, external_request, conf, version)
+    local value, err = policies[conf.cache_policy].probe(conf, md5(cache_key))
+
+    if value then
+      response = value
+    else
+      response, err = external_request(conf, version)
+
+      local opts = { ttl = conf.cache_ttl }
+      local cached, err = policies[conf.cache_policy].set(conf, md5(cache_key), response, opts)
+    end
 
     -- check if the cache must be invalidated
-    should_invalidate_cache = false
+    local should_invalidate_cache = false
 
     for k,v in pairs(conf.cache_invalidate_when_streamup_path) do
       if kong.request.get_path() == v then
@@ -144,6 +154,8 @@ function _M.execute(conf, version)
     end
 
     if should_invalidate_cache then
+      policies[conf.cache_policy].invalidate(conf, md5(cache_key))
+
       kong.cache:invalidate(md5(cache_key))
     end
   else

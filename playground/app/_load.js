@@ -46,8 +46,11 @@ async function load() {
     'config.path': '/',
     'config.cache_enabled': true,
     'config.cache_based_on': 'header',
-    'config.cache_invalidate_when_streamup_path': ['/invalidatex', '/invalidatey'],
+    'config.cache_invalidate_when_streamup_path': ['/invalidate'],
     'config.cache_ttl': 60,
+    'config.cache_policy': 'redis',
+    'config.redis_host': 'playground-redis',
+    'config.redis_database': 0,
   });
 
   console.log('Playground on Kong created')
