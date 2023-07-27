@@ -1,6 +1,7 @@
 local reports = require "kong.reports"
 local redis = require "resty.redis"
 local cjson = require "cjson"
+local fmt = string.format
 
 local redis_prefix = 'kong:themiddleman:'
 
