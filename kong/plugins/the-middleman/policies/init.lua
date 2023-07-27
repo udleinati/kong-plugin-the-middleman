@@ -3,7 +3,7 @@ local redis = require "resty.redis"
 local cjson = require "cjson"
 local fmt = string.format
 
-local redis_prefix = 'kong:themiddleman:'
+local redis_prefix = 'kong:the-middleman:'
 
 local function is_present(str)
   return str and str ~= "" and str ~= null
