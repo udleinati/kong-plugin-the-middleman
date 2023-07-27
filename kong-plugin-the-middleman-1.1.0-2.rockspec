@@ -1,9 +1,9 @@
 package = "kong-plugin-the-middleman"
-version = "1.1.0-1"
+version = "1.1.0-2"
 
 source = {
   url = "git://github.com/udleinati/kong-plugin-the-middleman",
-  tag = "1.1.0-1",
+  tag = "1.1.0-2",
 }
 
 supported_platforms = {"linux", "macosx"}
@@ -26,5 +26,6 @@ build = {
       ["kong.plugins.the-middleman.access"] = "kong/plugins/the-middleman/access.lua",
       ["kong.plugins.the-middleman.handler"] = "kong/plugins/the-middleman/handler.lua",
       ["kong.plugins.the-middleman.schema"] = "kong/plugins/the-middleman/schema.lua"
+      ["kong.plugins.the-middleman.policies"] = "kong/plugins/the-middleman/policies/init.lua"
    }
 }
