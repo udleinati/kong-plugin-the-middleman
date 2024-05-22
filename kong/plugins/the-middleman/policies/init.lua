@@ -45,13 +45,9 @@ local function get_redis_connection(conf)
     if is_present(conf.redis_password) then
       local ok, err
       if is_present(conf.redis_username) then
-        ok, err = kong.vault.try(function(cfg)
-          return red:auth(cfg.redis_username, cfg.redis_password)
-        end, conf)
+        ok, err = red:auth(conf.redis_username, conf.redis_password)
       else
-        ok, err = kong.vault.try(function(cfg)
-          return red:auth(cfg.redis_password)
-        end, conf)
+        ok, err = red:auth(conf.redis_password)
       end
       if not ok then
         kong.log.err("failed to auth Redis: ", err)
@@ -139,7 +135,7 @@ return {
         redis.call("set", cache_key, cache_value)
         redis.call("expire", cache_key, expiration)
         return true
-      ]], 1, redis_prefix .. key, cjson.encode(value), opts.ttl)
+      ]], 1, (conf.redis_username and conf.redis_username .. '::' or '') .. redis_prefix .. key, cjson.encode(value), opts.ttl)
 
       if err then
         return nil, err
@@ -164,7 +160,7 @@ return {
 
       reports.retrieve_redis_version(red)
 
-      local response, err = red:get(redis_prefix .. key)
+      local response, err = red:get((conf.redis_username and conf.redis_username .. '::' or '') .. redis_prefix .. key)
       if err then
         return nil, err
       end
@@ -192,7 +188,7 @@ return {
 
       reports.retrieve_redis_version(red)
 
-      local response, err = red:del(redis_prefix .. key)
+      local response, err = red:del((conf.redis_username and conf.redis_username .. '::' or '') .. redis_prefix .. key)
       if err then
         return nil, err
       end
