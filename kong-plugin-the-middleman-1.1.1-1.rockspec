@@ -2,7 +2,7 @@ package = "kong-plugin-the-middleman"
 version = "1.1.1-1"
 
 source = {
-  url = "https://github.com/udleinati/kong-plugin-the-middleman",
+  url = "git://github.com/udleinati/kong-plugin-the-middleman",
   tag = "1.1.1-1",
 }
 
