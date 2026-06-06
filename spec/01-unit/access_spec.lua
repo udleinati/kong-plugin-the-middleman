@@ -40,16 +40,20 @@ local function build(opts)
   local kong_mock, recorded = mocks.fake_kong({ request = opts.request })
   local http_module, http_client = mocks.fake_http_module()
   local policies, policy_calls, policy_state = mocks.fake_policies()
+  local lock_module, lock_calls = mocks.fake_lock({ lock_fail = opts.lock_fail, new_fail = opts.new_fail })
 
   if opts.http_response then http_client.response = opts.http_response end
   if opts.http_err then http_client.err = opts.http_err end
   if opts.probe_return ~= nil then policy_state.probe_return = opts.probe_return end
+  if opts.probe_err ~= nil then policy_state.probe_err = opts.probe_err end
+  if opts.probe_fill ~= nil then policy_state.probe_fill = opts.probe_fill end
 
   local access = mocks.load_with("kong.plugins.the-middleman.access", {
     kong = kong_mock,
     ngx = ngx_mock,
     packages = {
       ["resty.http"] = http_module,
+      ["resty.lock"] = lock_module,
       ["kong.plugins.the-middleman.policies"] = policies,
     },
   })
@@ -60,6 +64,7 @@ local function build(opts)
     http = http_client,
     policy_calls = policy_calls,
     policy_state = policy_state,
+    lock = lock_calls,
   }
 end
 
@@ -375,6 +380,61 @@ describe("the-middleman access", function()
 
         assert.equal("MISS", ctx.recorded.response_headers[CACHE_HEADER])
         assert.equal("admin", ctx.recorded.response_headers["X-Role"])
+      end)
+    end)
+
+    describe("stampede / backend-down handling", function()
+      it("acquires and releases the per-node lock on a MISS", function()
+        local ctx = build({
+          probe_return = nil,
+          http_response = { status = 200, body = '{"role":"admin"}', headers = {} },
+        })
+        ctx.access.execute(default_conf({ cache_enabled = true }), VERSION)
+
+        assert.equal("kong_locks", ctx.lock.dict)
+        assert.equal(1, #ctx.lock.locked)
+        assert.equal(1, ctx.lock.unlocked)
+        assert.equal(1, #ctx.http.requests)
+      end)
+
+      it("re-probes under the lock and serves a peer's fill without refetching", function()
+        local ctx = build({
+          probe_return = nil,  -- first probe: MISS
+          probe_fill = { status = 200, body = '{"role":"admin"}', headers = {} }, -- re-probe: HIT
+        })
+        ctx.access.execute(default_conf({ cache_enabled = true }), VERSION)
+
+        assert.equal(0, #ctx.http.requests, "must not refetch when a peer already filled the cache")
+        assert.equal(0, #ctx.policy_calls.set)
+        assert.equal("HIT", ctx.recorded.upstream_headers[CACHE_HEADER])
+        assert.equal(1, ctx.lock.unlocked, "the lock must be released")
+      end)
+
+      it("fails open and fetches when the lock cannot be acquired", function()
+        local ctx = build({
+          probe_return = nil,
+          lock_fail = true,
+          http_response = { status = 200, body = '{"role":"admin"}', headers = {} },
+        })
+        ctx.access.execute(default_conf({ cache_enabled = true }), VERSION)
+
+        assert.equal(1, #ctx.http.requests)
+        assert.equal("MISS", ctx.recorded.upstream_headers[CACHE_HEADER])
+        assert.equal(0, ctx.lock.unlocked, "nothing to unlock when acquisition failed")
+      end)
+
+      it("fails open without re-touching the cache when the backend is unreachable", function()
+        local ctx = build({
+          probe_err = "connection refused",
+          http_response = { status = 200, body = '{"role":"admin"}', headers = {} },
+        })
+        ctx.access.execute(default_conf({ cache_enabled = true }), VERSION)
+
+        assert.equal(1, #ctx.http.requests)
+        assert.equal("MISS", ctx.recorded.upstream_headers[CACHE_HEADER])
+        assert.equal(1, #ctx.policy_calls.probe, "only one probe; no re-probe when the backend is down")
+        assert.equal(0, #ctx.policy_calls.set, "must not write to a down backend")
+        assert.equal(0, #ctx.lock.locked, "no lock attempt when the backend is down")
       end)
     end)
   end)

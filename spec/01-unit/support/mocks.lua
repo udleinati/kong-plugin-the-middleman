@@ -117,11 +117,19 @@ end
 -- `probe_return` controls what a probe yields (nil = MISS).
 function M.fake_policies()
   local calls = { probe = {}, set = {}, invalidate = {} }
-  local state = { probe_return = nil }
+  local state = { probe_return = nil, probe_err = nil, probe_fill = nil }
 
   local policy = {
     probe = function(conf, key)
       calls.probe[#calls.probe + 1] = { conf = conf, key = key }
+      if state.probe_err then
+        return nil, state.probe_err
+      end
+      -- probe_fill simulates a peer filling the cache between the first probe
+      -- and the re-probe taken under the stampede lock.
+      if state.probe_fill ~= nil and #calls.probe > 1 then
+        return state.probe_fill
+      end
       return state.probe_return
     end,
     set = function(conf, key, value, opts)
@@ -137,6 +145,36 @@ function M.fake_policies()
   -- Both policy names point at the same recorder for convenience.
   local policies = { ["local"] = policy, ["redis"] = policy }
   return policies, calls, state
+end
+
+-- ---------------------------------------------------------------------------
+-- resty.lock
+-- ---------------------------------------------------------------------------
+-- Records lock/unlock calls. `opts.lock_fail` makes acquisition fail and
+-- `opts.new_fail` makes construction fail, so specs can exercise fail-open.
+function M.fake_lock(opts)
+  opts = opts or {}
+  local calls = { dict = nil, locked = {}, unlocked = 0 }
+
+  local lock = {}
+  function lock:lock(key)
+    calls.locked[#calls.locked + 1] = key
+    if opts.lock_fail then return nil, "timeout" end
+    return 0
+  end
+  function lock:unlock()
+    calls.unlocked = calls.unlocked + 1
+    return 1
+  end
+
+  local module = {
+    new = function(_, dict)
+      calls.dict = dict
+      if opts.new_fail then return nil, "no shared dict" end
+      return lock
+    end,
+  }
+  return module, calls
 end
 
 -- ---------------------------------------------------------------------------

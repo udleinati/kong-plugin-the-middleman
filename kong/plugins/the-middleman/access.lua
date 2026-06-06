@@ -4,6 +4,11 @@ local utils = require "kong.plugins.the-middleman.utils"
 local _M = {}
 local http = require "resty.http"
 local json = require "cjson"
+local resty_lock = require "resty.lock"
+
+-- resty.lock keys live in Kong's bundled `kong_locks` shared dict; prefix them
+-- so they can't collide with other users of that dict.
+local LOCK_PREFIX = "the-middleman:"
 
 local kong = kong
 local error = error
@@ -170,6 +175,22 @@ local function inject_body_response_into_header(conf, response)
   end
 end
 
+-- Fetch the middle-request and persist it, unless we're invalidating this key
+-- or the response is an error (a transient 4xx/5xx must not poison subsequent
+-- good requests for the whole TTL).
+local function fetch_and_store(conf, version, policy, cache_key, invalidate)
+  local response, err = external_request(conf, version)
+  if err then
+    return nil, err
+  end
+
+  if not invalidate and response.status < 400 then
+    policy.set(conf, cache_key, response, { ttl = conf.cache_ttl })
+  end
+
+  return response
+end
+
 -- Resolve the middle-request response, going through the cache when enabled.
 local function resolve_response(conf, version)
   if not conf.cache_enabled then
@@ -185,23 +206,44 @@ local function resolve_response(conf, version)
   local policy = policies[conf.cache_policy]
 
   local response, err
-  local value = policy.probe(conf, cache_key)
+  local value, probe_err = policy.probe(conf, cache_key)
 
   if value then
     set_cache_status(conf, "HIT")
     response = value
-  else
+
+  elseif probe_err then
+    -- The cache backend is unreachable (e.g. Redis down). Fail open: fetch once
+    -- and do NOT touch the cache again — a second connection would just time out
+    -- too, doubling the latency of every request during the outage.
     set_cache_status(conf, "MISS")
     response, err = external_request(conf, version)
     if err then
       return nil, err
     end
 
-    -- Skip persisting when we are about to invalidate this key anyway, and never
-    -- cache an error response: a transient 4xx/5xx from the middle-service must
-    -- not poison subsequent good requests for the whole TTL.
-    if not invalidate and response.status < 400 then
-      policy.set(conf, cache_key, response, { ttl = conf.cache_ttl })
+  else
+    -- Clean cache MISS. Serialize the fill with a per-node lock so a burst of
+    -- concurrent requests for the same key triggers a single middle-request
+    -- instead of a stampede. Any lock failure is non-fatal (we just fetch).
+    local lock = resty_lock:new("kong_locks")
+    local locked = lock and lock:lock(LOCK_PREFIX .. cache_key)
+
+    -- Re-check under the lock: a peer may have filled the cache while we waited.
+    local filled = locked and policy.probe(conf, cache_key) or nil
+    if filled then
+      set_cache_status(conf, "HIT")
+      response = filled
+    else
+      set_cache_status(conf, "MISS")
+      response, err = fetch_and_store(conf, version, policy, cache_key, invalidate)
+    end
+
+    if locked then
+      lock:unlock()
+    end
+    if err then
+      return nil, err
     end
   end
 
