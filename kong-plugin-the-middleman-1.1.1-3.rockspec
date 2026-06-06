@@ -14,9 +14,10 @@ description = {
    license = "MIT"
 }
 
+-- lua-cjson and lua-resty-http ship with Kong; they are intentionally not
+-- pinned here so the plugin uses whatever version the running Kong provides.
 dependencies = {
   "lua >= 5.1",
-  "lua-cjson == 2.1.0.6-1",
   "lua-resty-http >= 0.11",
 }
 

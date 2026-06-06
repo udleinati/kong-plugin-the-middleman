@@ -75,14 +75,19 @@ $ curl -X POST http://kong:8001/apis/{api}/plugins \
 | `config.cache_invalidate_when_streamup_path` | [] | The cache will be invalidate when the request access the `path`. No matter the statuscode that it will return. |
 | `config.cache_ttl` | 60 | TTL |
 | `config.cache_policy` | local | Allowed values: `local` or `redis` |
-| `config.redis_host` |  | Mandatory. |
-| `config.redis_port` | 6379 | |
-| `config.redis_password` | | |
-| `config.redis_username` | | |
-| `config.redis_ssl` | false | |
-| `config.redis_ssl_verify` | false | |
-| `config.redis_timeout` | 2000 | |
-| `config.redis_database` | 0 | |
+| `config.redis.host` |  | Mandatory when `cache_policy` is `redis`. |
+| `config.redis.port` | 6379 | |
+| `config.redis.password` | | Referenceable (vault). |
+| `config.redis.username` | | Referenceable (vault). Requires Redis 6.0.0+. |
+| `config.redis.ssl` | false | |
+| `config.redis.ssl_verify` | false | |
+| `config.redis.server_name` | | SNI used for the TLS handshake. |
+| `config.redis.timeout` | 2000 | |
+| `config.redis.database` | 0 | |
+
+> The Redis config uses Kong's shared `config.redis.*` record (Kong 3.6+). The
+> legacy flat fields (`config.redis_host`, `config.redis_port`, …) are still
+> accepted for backwards compatibility and are folded into `config.redis.*`.
 
 ## Development & Testing
 
@@ -103,7 +108,7 @@ make test                  # luacheck + the whole suite
 make unit                  # only spec/01-unit
 make integration           # only spec/02-integration
 make lint                  # luacheck only
-make test KONG_VERSION=2.8.5   # pin a specific Kong version
+make test KONG_VERSION=3.9.2   # pin a specific Kong version
 ```
 
 CI runs the same suite across several Kong versions (see

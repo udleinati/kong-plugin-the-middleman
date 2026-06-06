@@ -11,8 +11,8 @@ end
 
 -- Build the namespaced Redis key, optionally scoped by username.
 local function redis_key(conf, key)
-  local username_scope = is_present(conf.redis_username)
-    and (conf.redis_username .. '::')
+  local username_scope = is_present(conf.redis.username)
+    and (conf.redis.username .. '::')
     or ''
   return username_scope .. redis_prefix .. key
 end
@@ -32,28 +32,33 @@ local function release_redis_connection(red)
 end
 
 local function get_redis_connection(conf)
+  -- `conf.redis` is the shared kong.tools.redis config record (host, port,
+  -- ssl, timeout, ...). It is always present when this policy runs because the
+  -- schema requires config.redis.host when cache_policy = "redis".
+  local redis_conf = conf.redis
+
   local red = redis:new()
-  red:set_timeout(conf.redis_timeout)
+  red:set_timeout(redis_conf.timeout)
 
   -- `sock_opts` is intentionally a per-call local: a module-level table would
   -- be shared across concurrent requests and could be clobbered when different
   -- routes use different Redis configs.
   local sock_opts = {
-    ssl = conf.redis_ssl,
-    ssl_verify = conf.redis_ssl_verify,
-    server_name = conf.redis_server_name,
+    ssl = redis_conf.ssl,
+    ssl_verify = redis_conf.ssl_verify,
+    server_name = redis_conf.server_name,
   }
 
-  -- use a special pool name only if redis_database is set to non-zero
+  -- use a special pool name only if redis database is set to non-zero
   -- otherwise use the default pool name host:port
-  if conf.redis_database ~= 0 then
+  if redis_conf.database ~= 0 then
     sock_opts.pool = fmt("%s:%d;%d",
-                         conf.redis_host,
-                         conf.redis_port,
-                         conf.redis_database)
+                         redis_conf.host,
+                         redis_conf.port,
+                         redis_conf.database)
   end
 
-  local ok, err = red:connect(conf.redis_host, conf.redis_port, sock_opts)
+  local ok, err = red:connect(redis_conf.host, redis_conf.port, sock_opts)
   if not ok then
     kong.log.err("failed to connect to Redis: ", err)
     return nil, err
@@ -66,12 +71,12 @@ local function get_redis_connection(conf)
   end
 
   if times == 0 then
-    if is_present(conf.redis_password) then
+    if is_present(redis_conf.password) then
       local ok, err
-      if is_present(conf.redis_username) then
-        ok, err = red:auth(conf.redis_username, conf.redis_password)
+      if is_present(redis_conf.username) then
+        ok, err = red:auth(redis_conf.username, redis_conf.password)
       else
-        ok, err = red:auth(conf.redis_password)
+        ok, err = red:auth(redis_conf.password)
       end
       if not ok then
         kong.log.err("failed to auth Redis: ", err)
@@ -79,11 +84,11 @@ local function get_redis_connection(conf)
       end
     end
 
-    if conf.redis_database ~= 0 then
+    if redis_conf.database ~= 0 then
       -- Only call select first time, since we know the connection is shared
       -- between instances that use the same redis database
 
-      local ok, err = red:select(conf.redis_database)
+      local ok, err = red:select(redis_conf.database)
       if not ok then
         kong.log.err("failed to change Redis database: ", err)
         return nil, err
@@ -145,13 +150,9 @@ return {
 
       reports.retrieve_redis_version(red)
 
-      -- the usage of redis command incr instead of get is to avoid race conditions in concurrent calls
-      local response, err = red:eval([[
-        local cache_key, cache_value, expiration = KEYS[1], ARGV[1], ARGV[2]
-        redis.call("set", cache_key, cache_value)
-        redis.call("expire", cache_key, expiration)
-        return true
-      ]], 1, redis_key(conf, key), cjson.encode(value), opts.ttl)
+      -- Store the value and its TTL atomically in a single round-trip
+      -- (SET key value EX ttl), avoiding a separate EXPIRE call.
+      local response, err = red:set(redis_key(conf, key), cjson.encode(value), "EX", opts.ttl)
 
       if err then
         return nil, err

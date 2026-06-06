@@ -301,8 +301,7 @@ describe("the-middleman access", function()
 
         assert.equal(1, #ctx.http.requests)
         assert.equal(0, #ctx.policy_calls.set, "should not persist a key it is about to invalidate")
-        assert.equal(1, #ctx.policy_calls.invalidate)
-        assert.equal(1, #ctx.recorded.invalidated, "kong.cache:invalidate should also be called")
+        assert.equal(1, #ctx.policy_calls.invalidate, "invalidation is delegated to the policy")
       end)
 
       it("does not invalidate on a non-matching path", function()

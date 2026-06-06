@@ -8,7 +8,7 @@ PONGO_VERSION ?= master
 PONGO_DIR     ?= .pongo/kong-pongo
 PONGO         := $(PONGO_DIR)/pongo.sh
 
-KONG_VERSION  ?= 2.8.5
+KONG_VERSION  ?= 3.9.2
 
 .PHONY: help pongo lint unit integration test clean
 

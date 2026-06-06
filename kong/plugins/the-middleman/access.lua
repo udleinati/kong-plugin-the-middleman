@@ -168,8 +168,9 @@ local function resolve_response(conf, version)
   end
 
   if invalidate then
+    -- Delegate to the configured policy; the local policy already wraps
+    -- kong.cache:invalidate, the redis policy deletes the key from Redis.
     policy.invalidate(conf, cache_key)
-    kong.cache:invalidate(cache_key)
   end
 
   return response

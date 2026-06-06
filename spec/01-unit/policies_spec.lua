@@ -29,7 +29,7 @@ local function fake_redis(opts)
   opts = opts or {}
   local red = {
     calls = {
-      connect = {}, auth = {}, select = {}, eval = {},
+      connect = {}, auth = {}, select = {}, set = {},
       get = {}, del = {}, keepalive = {}, timeout = {},
     },
   }
@@ -48,9 +48,9 @@ local function fake_redis(opts)
     self.calls.select[#self.calls.select + 1] = db
     return 1
   end
-  function red:eval(script, n, key, value, ttl)
-    self.calls.eval[#self.calls.eval + 1] = { key = key, value = value, ttl = ttl }
-    return true
+  function red:set(key, value, ex_flag, ttl)
+    self.calls.set[#self.calls.set + 1] = { key = key, value = value, ex = ex_flag, ttl = ttl }
+    return "OK"
   end
   function red:get(key)
     self.calls.get[#self.calls.get + 1] = key
@@ -69,20 +69,21 @@ local function fake_redis(opts)
   return module, red
 end
 
+-- conf.redis is the shared kong.tools.redis config record (Kong 3.6+).
 local function redis_conf(overrides)
-  local conf = {
-    redis_host = "127.0.0.1",
-    redis_port = 6379,
-    redis_timeout = 2000,
-    redis_database = 0,
-    redis_ssl = false,
-    redis_ssl_verify = false,
-    redis_server_name = nil,
-    redis_password = nil,
-    redis_username = nil,
+  local redis = {
+    host = "127.0.0.1",
+    port = 6379,
+    timeout = 2000,
+    database = 0,
+    ssl = false,
+    ssl_verify = false,
+    server_name = nil,
+    password = nil,
+    username = nil,
   }
-  for k, v in pairs(overrides or {}) do conf[k] = v end
-  return conf
+  for k, v in pairs(overrides or {}) do redis[k] = v end
+  return { redis = redis }
 end
 
 -- Load policies fresh with all collaborators mocked.
@@ -160,8 +161,9 @@ describe("the-middleman policies", function()
       local ctx = build()
       ctx.policies["redis"].set(redis_conf(), "abc", { body = "x" }, { ttl = 42 })
 
-      local call = ctx.red.calls.eval[1]
+      local call = ctx.red.calls.set[1]
       assert.equal("kong:the-middleman:abc", call.key)
+      assert.equal("EX", call.ex)
       assert.equal(42, call.ttl)
       assert.same({ body = "x" }, cjson.decode(call.value))
       assert.equal(1, #ctx.red.calls.keepalive)
@@ -169,8 +171,8 @@ describe("the-middleman policies", function()
 
     it("scopes the key by username when set", function()
       local ctx = build()
-      ctx.policies["redis"].set(redis_conf({ redis_username = "alice" }), "abc", {}, { ttl = 1 })
-      assert.equal("alice::kong:the-middleman:abc", ctx.red.calls.eval[1].key)
+      ctx.policies["redis"].set(redis_conf({ username = "alice" }), "abc", {}, { ttl = 1 })
+      assert.equal("alice::kong:the-middleman:abc", ctx.red.calls.set[1].key)
     end)
 
     it("probe() decodes a stored value", function()
@@ -193,13 +195,13 @@ describe("the-middleman policies", function()
 
     it("authenticates with username + password when both are set", function()
       local ctx = build()
-      ctx.policies["redis"].probe(redis_conf({ redis_username = "u", redis_password = "p" }), "abc")
+      ctx.policies["redis"].probe(redis_conf({ username = "u", password = "p" }), "abc")
       assert.same({ "u", "p" }, ctx.red.calls.auth[1])
     end)
 
     it("authenticates with password only when no username", function()
       local ctx = build()
-      ctx.policies["redis"].probe(redis_conf({ redis_password = "p" }), "abc")
+      ctx.policies["redis"].probe(redis_conf({ password = "p" }), "abc")
       assert.same({ "p" }, ctx.red.calls.auth[1])
     end)
 
@@ -209,9 +211,9 @@ describe("the-middleman policies", function()
       assert.equal(0, #ctx.red.calls.auth)
     end)
 
-    it("selects the database and uses a scoped pool when redis_database is non-zero", function()
+    it("selects the database and uses a scoped pool when redis database is non-zero", function()
       local ctx = build()
-      ctx.policies["redis"].probe(redis_conf({ redis_database = 3 }), "abc")
+      ctx.policies["redis"].probe(redis_conf({ database = 3 }), "abc")
       assert.equal(3, ctx.red.calls.select[1])
       assert.equal("127.0.0.1:6379;3", ctx.red.calls.connect[1].sock_opts.pool)
     end)
@@ -225,7 +227,7 @@ describe("the-middleman policies", function()
 
     it("passes ssl options through to connect()", function()
       local ctx = build()
-      ctx.policies["redis"].probe(redis_conf({ redis_ssl = true, redis_ssl_verify = true }), "abc")
+      ctx.policies["redis"].probe(redis_conf({ ssl = true, ssl_verify = true }), "abc")
       local sock_opts = ctx.red.calls.connect[1].sock_opts
       assert.is_true(sock_opts.ssl)
       assert.is_true(sock_opts.ssl_verify)

@@ -63,7 +63,7 @@ describe(PLUGIN_NAME .. ": schema", function()
     assert.is_not_nil(err.config.cache_based_on)
   end)
 
-  it("requires redis_host when cache_policy is redis", function()
+  it("requires redis.host when cache_policy is redis", function()
     local ok, err = validate({
       url = "http://middle.test",
       cache_policy = "redis",
@@ -72,15 +72,45 @@ describe(PLUGIN_NAME .. ": schema", function()
     assert.is_not_nil(err)
   end)
 
-  it("accepts a complete redis config", function()
+  it("accepts a complete redis config (nested config.redis.*)", function()
+    local ok = validate({
+      url = "http://middle.test",
+      cache_enabled = true,
+      cache_policy = "redis",
+      redis = {
+        host = "127.0.0.1",
+        port = 6379,
+        timeout = 2000,
+      },
+    })
+    assert.is_truthy(ok)
+    assert.equal("127.0.0.1", ok.config.redis.host)
+  end)
+
+  it("applies redis defaults from the shared schema", function()
+    local ok = validate({
+      url = "http://middle.test",
+      cache_enabled = true,
+      cache_policy = "redis",
+      redis = { host = "127.0.0.1" },
+    })
+    assert.is_truthy(ok)
+    assert.equal(6379, ok.config.redis.port)
+    assert.equal(0, ok.config.redis.database)
+    assert.is_false(ok.config.redis.ssl)
+  end)
+
+  it("still accepts the legacy flat redis_* config and folds it into config.redis", function()
     local ok = validate({
       url = "http://middle.test",
       cache_enabled = true,
       cache_policy = "redis",
       redis_host = "127.0.0.1",
-      redis_port = 6379,
+      redis_port = 6380,
       redis_timeout = 2000,
     })
     assert.is_truthy(ok)
+    assert.equal("127.0.0.1", ok.config.redis.host)
+    assert.equal(6380, ok.config.redis.port)
   end)
 end)
