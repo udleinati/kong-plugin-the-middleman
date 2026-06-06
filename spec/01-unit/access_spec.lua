@@ -146,11 +146,26 @@ describe("the-middleman access", function()
       assert.same({ a = 1 }, cjson.decode(ctx.recorded.upstream_headers["X-Data"]))
     end)
 
-    it("skips falsy values", function()
+    it("injects boolean false as a string instead of dropping it", function()
+      -- A false field is meaningful (e.g. {"isAdmin":false}); dropping it would
+      -- make it indistinguishable from "absent" downstream.
       local ctx = build({
         http_response = { status = 200, body = '{"role":false,"ok":"yes"}', headers = {} },
       })
       ctx.access.execute(default_conf(), VERSION)
+      assert.equal("false", ctx.recorded.upstream_headers["X-Role"])
+      assert.equal("yes", ctx.recorded.upstream_headers["X-Ok"])
+    end)
+
+    it("skips a JSON null without crashing", function()
+      -- cjson decodes null to a userdata sentinel; injecting it would raise an
+      -- "invalid header value" error and 500 the whole request.
+      local ctx = build({
+        http_response = { status = 200, body = '{"role":null,"ok":"yes"}', headers = {} },
+      })
+      assert.has_no.errors(function()
+        ctx.access.execute(default_conf(), VERSION)
+      end)
       assert.is_nil(ctx.recorded.upstream_headers["X-Role"])
       assert.equal("yes", ctx.recorded.upstream_headers["X-Ok"])
     end)
@@ -204,6 +219,23 @@ describe("the-middleman access", function()
       assert.same({ ["x-a"] = "b" }, ctx.recorded.exit.headers)
       assert.is_nil(ctx.recorded.upstream_headers["X-Role"])
     end)
+
+    it("strips connection/length headers when replaying an error", function()
+      -- Replaying the middle-service's own Content-Length/Transfer-Encoding onto
+      -- the client response would corrupt the body Kong actually sends.
+      local ctx = build({
+        http_response = {
+          status = 502, body = "boom",
+          headers = { ["Content-Length"] = "3", ["Transfer-Encoding"] = "chunked", ["X-Keep"] = "v" },
+        },
+      })
+      ctx.access.execute(default_conf(), VERSION)
+
+      assert.equal(502, ctx.recorded.exit.status)
+      assert.is_nil(ctx.recorded.exit.headers["Content-Length"])
+      assert.is_nil(ctx.recorded.exit.headers["Transfer-Encoding"])
+      assert.equal("v", ctx.recorded.exit.headers["X-Keep"])
+    end)
   end)
 
   describe("cache disabled", function()
@@ -251,19 +283,19 @@ describe("the-middleman access", function()
       it("uses the host by default", function()
         local ctx = build({ request = { host = "api.test" } })
         ctx.access.execute(default_conf({ cache_enabled = true, cache_based_on = "host" }), VERSION)
-        assert.equal("md5(api.test)", probed_key(ctx))
+        assert.equal("md5(http://middle.test|/auth|api.test)", probed_key(ctx))
       end)
 
       it("uses host + path", function()
         local ctx = build({ request = { host = "api.test", path = "/x" } })
         ctx.access.execute(default_conf({ cache_enabled = true, cache_based_on = "host-path" }), VERSION)
-        assert.equal("md5(api.test/x)", probed_key(ctx))
+        assert.equal("md5(http://middle.test|/auth|api.test/x)", probed_key(ctx))
       end)
 
       it("uses host + path + query", function()
         local ctx = build({ request = { host = "api.test", path_with_query = "/x?a=1" } })
         ctx.access.execute(default_conf({ cache_enabled = true, cache_based_on = "host-path-query" }), VERSION)
-        assert.equal("md5(api.test/x?a=1)", probed_key(ctx))
+        assert.equal("md5(http://middle.test|/auth|api.test/x?a=1)", probed_key(ctx))
       end)
 
       it("uses the first present header from the prioritized list", function()
@@ -273,7 +305,7 @@ describe("the-middleman access", function()
           cache_based_on = "header",
           cache_based_on_headers = "x-missing,x-tenant",
         }), VERSION)
-        assert.equal("md5(t-2)", probed_key(ctx))
+        assert.equal("md5(http://middle.test|/auth|t-2)", probed_key(ctx))
       end)
 
       it("falls back to host when no configured header is present", function()
@@ -283,7 +315,7 @@ describe("the-middleman access", function()
           cache_based_on = "header",
           cache_based_on_headers = "authorization",
         }), VERSION)
-        assert.equal("md5(api.test)", probed_key(ctx))
+        assert.equal("md5(http://middle.test|/auth|api.test)", probed_key(ctx))
       end)
     end)
 

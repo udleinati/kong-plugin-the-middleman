@@ -9,10 +9,15 @@ local REDIS_DATABASE = 0
 -- Same JSON document the (mocked) middle-service replies with in 02-access_spec.
 local MIDDLE_BODY = '{"tenantId":"123","role":"admin"}'
 
--- Mirror the namespacing done in policies/init.lua so we can assert on the
--- exact key the plugin writes.
+-- The middle-service endpoint both cached routes point at. The cache key is
+-- namespaced by this endpoint (see access.lua), so routes sharing it share the
+-- key — which is exactly what the invalidation route below relies on.
+local MIDDLE_PATH = "/__redis_middle_ok"
+local MIDDLE_URL = "http://" .. helpers.get_proxy_ip(false) .. ":" .. helpers.get_proxy_port(false)
+
+-- Mirror the namespacing done in access.lua so we can assert on the exact key.
 local function cache_key(host)
-  return "kong:the-middleman:" .. ngx.md5(host)
+  return "kong:the-middleman:" .. ngx.md5(MIDDLE_URL .. "|" .. MIDDLE_PATH .. "|" .. host)
 end
 
 local function redis_connect()
@@ -50,7 +55,7 @@ for _, strategy in helpers.each_strategy() do
         },
       })
 
-      local middle_url = "http://" .. helpers.get_proxy_ip(false) .. ":" .. helpers.get_proxy_port(false)
+      local middle_url = MIDDLE_URL
 
       -- Protected service: Kong's built-in mock upstream echoing the request.
       local echo_service = bp.services:insert({

@@ -30,7 +30,7 @@ local function fake_redis(opts)
   local red = {
     calls = {
       connect = {}, auth = {}, select = {}, set = {},
-      get = {}, del = {}, keepalive = {}, timeout = {},
+      get = {}, del = {}, keepalive = {}, timeout = {}, close = {},
     },
   }
   function red:set_timeout(t) self.calls.timeout[#self.calls.timeout + 1] = t end
@@ -50,18 +50,25 @@ local function fake_redis(opts)
   end
   function red:set(key, value, ex_flag, ttl)
     self.calls.set[#self.calls.set + 1] = { key = key, value = value, ex = ex_flag, ttl = ttl }
+    if opts.set_fail then return nil, opts.set_fail end
     return "OK"
   end
   function red:get(key)
     self.calls.get[#self.calls.get + 1] = key
+    if opts.get_fail then return nil, opts.get_fail end
     return opts.get_return
   end
   function red:del(key)
     self.calls.del[#self.calls.del + 1] = key
+    if opts.del_fail then return nil, opts.del_fail end
     return 1
   end
   function red:set_keepalive(a, b)
     self.calls.keepalive[#self.calls.keepalive + 1] = { a, b }
+    return 1
+  end
+  function red:close()
+    self.calls.close[#self.calls.close + 1] = true
     return 1
   end
 
@@ -231,6 +238,26 @@ describe("the-middleman policies", function()
       local sock_opts = ctx.red.calls.connect[1].sock_opts
       assert.is_true(sock_opts.ssl)
       assert.is_true(sock_opts.ssl_verify)
+    end)
+
+    -- F2: a corrupt cache entry must not crash the request.
+    it("treats a corrupt (non-JSON) cached value as a miss", function()
+      local ctx = build({ get_return = "this is not json" })
+      local result
+      assert.has_no.errors(function()
+        result = ctx.policies["redis"].probe(redis_conf(), "abc")
+      end)
+      assert.is_nil(result)
+    end)
+
+    -- F1: a connection left in an unknown state after a command error must be
+    -- closed, not returned to the keepalive pool.
+    it("closes the connection instead of pooling it on a command error", function()
+      local ctx = build({ set_fail = "redis write error" })
+      local _, err = ctx.policies["redis"].set(redis_conf(), "abc", {}, { ttl = 1 })
+      assert.is_string(err)
+      assert.equal(0, #ctx.red.calls.keepalive, "a broken connection must not be pooled")
+      assert.equal(1, #ctx.red.calls.close)
     end)
   end)
 end)

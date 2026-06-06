@@ -155,6 +155,9 @@ return {
       local response, err = red:set(redis_key(conf, key), cjson.encode(value), "EX", opts.ttl)
 
       if err then
+        -- The connection state is unknown after an error; close it rather than
+        -- returning a possibly-broken socket to the keepalive pool.
+        red:close()
         return nil, err
       end
 
@@ -174,6 +177,7 @@ return {
 
       local response, err = red:get(redis_key(conf, key))
       if err then
+        red:close()
         return nil, err
       end
 
@@ -181,9 +185,18 @@ return {
 
       if response == ngx.null then
         return nil
-      else
-        return cjson.decode(response)
       end
+
+      -- A corrupt / non-JSON cached value must not crash the request; treat it
+      -- as a miss so the middle-service is re-queried (and the bad entry
+      -- overwritten).
+      local ok, decoded = pcall(cjson.decode, response)
+      if not ok then
+        kong.log.err("the-middleman: failed to decode cached value, treating as miss: ", decoded)
+        return nil
+      end
+
+      return decoded
     end,
     invalidate = function(conf, key)
       assert_string_key(key)
@@ -197,6 +210,7 @@ return {
 
       local _, err = red:del(redis_key(conf, key))
       if err then
+        red:close()
         return nil, err
       end
 

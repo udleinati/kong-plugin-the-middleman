@@ -12,6 +12,33 @@ local dasherize = utils.dasherize
 
 local CACHE_STATUS_HEADER = "X-Middleman-Cache-Status"
 
+-- cjson decodes a JSON `null` to this sentinel (a userdata), which is truthy in
+-- Lua, so it must be checked explicitly before injecting it as a header.
+local JSON_NULL = json.null
+
+-- Middle-service response headers that must NOT be replayed verbatim onto the
+-- client response: they describe the middle-service's own framing/connection
+-- and would corrupt the body Kong actually sends.
+local UNSAFE_REPLAY_HEADERS = {
+  ["content-length"] = true,
+  ["transfer-encoding"] = true,
+  ["connection"] = true,
+  ["keep-alive"] = true,
+}
+
+local function safe_replay_headers(headers)
+  if not headers then
+    return nil
+  end
+  local out = {}
+  for name, value in pairs(headers) do
+    if not UNSAFE_REPLAY_HEADERS[string.lower(name)] then
+      out[name] = value
+    end
+  end
+  return out
+end
+
 -- Set the cache-status header on the upstream request and, when configured,
 -- mirror it onto the downstream response.
 local function set_cache_status(conf, status)
@@ -120,12 +147,16 @@ local function inject_body_response_into_header(conf, response)
   end
 
   for key, value in pairs(decoded_body) do
-    if value then
+    -- Skip only absent values (Lua nil / JSON null). `false` and `0` ARE
+    -- injected so the downstream can tell them apart from "missing".
+    if value ~= nil and value ~= JSON_NULL then
       local header_name = dasherize(conf.injected_header_prefix .. key)
       local header_value = value
 
       if type(header_value) == "table" then
         header_value = json.encode(header_value)
+      elseif type(header_value) == "boolean" then
+        header_value = tostring(header_value)
       end
 
       kong.service.request.set_header(header_name, header_value)
@@ -144,7 +175,11 @@ local function resolve_response(conf, version)
     return external_request(conf, version)
   end
 
-  local cache_key = md5(build_cache_key(conf))
+  -- Namespace the key by the middle-service endpoint so two plugin instances
+  -- pointing at different middle-services never share a cache entry (which would
+  -- leak one route's response into another). The same endpoint still shares a
+  -- key, which is what cross-route invalidation relies on.
+  local cache_key = md5(conf.url .. "|" .. (conf.path or "") .. "|" .. build_cache_key(conf))
   local invalidate = should_invalidate_cache(conf)
   local policy = policies[conf.cache_policy]
 
@@ -161,8 +196,10 @@ local function resolve_response(conf, version)
       return nil, err
     end
 
-    -- Skip persisting when we are about to invalidate this key anyway.
-    if not invalidate then
+    -- Skip persisting when we are about to invalidate this key anyway, and never
+    -- cache an error response: a transient 4xx/5xx from the middle-service must
+    -- not poison subsequent good requests for the whole TTL.
+    if not invalidate and response.status < 400 then
       policy.set(conf, cache_key, response, { ttl = conf.cache_ttl })
     end
   end
@@ -186,7 +223,7 @@ function _M.execute(conf, version)
 
   -- http error: replay the middle-request status/body/headers to the client
   if response.status >= 400 then
-    return kong.response.exit(response.status, response.body, response.headers)
+    return kong.response.exit(response.status, response.body, safe_replay_headers(response.headers))
   end
 
   -- inject the body response into the header
