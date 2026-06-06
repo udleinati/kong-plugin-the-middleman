@@ -1,38 +1,29 @@
-const http = require('http');
+// Middle service — the target of "the-middle-request" in the playground.
+//
+// the-middleman POSTs to this service before proxying. We return a static
+// identity JSON; the-middleman injects each key into the upstream request
+// headers (tenantId -> x-tenant-id, role -> x-role, accountId -> x-account-id).
+//
+// Runs on Deno (Deno.serve). No external dependencies.
 
-const hostname = '0.0.0.0';
-const port = process.env.PORT || 3000;
+const port = Number(Deno.env.get("PORT") ?? "3000");
 
-const server = http.createServer((req, res) => {
-  res.statusCode = 200;
-  res.setHeader('Content-Type', 'application/json');
-
-  let body = '{"tenantId": "123", "role": "admin", "accountId": "112233"}';
-
-  /* Print request body */
-  let requestBody = []
-  req.on('error', (err) => {
-    console.error(err);
-  }).on('data', (chunk) => {
-    requestBody.push(chunk);
-  }).on('end', () => {
-    requestBody = Buffer.concat(requestBody).toString();
+Deno.serve({ port, hostname: "0.0.0.0" }, async (req) => {
+  // Log the forwarded request body (headers/path/etc.) for debugging.
+  const requestBody = await req.text();
+  if (requestBody) {
     console.log(requestBody);
+  }
+
+  const body = JSON.stringify({
+    tenantId: "123",
+    role: "admin",
+    accountId: "112233",
   });
 
-  res.end(body);
+  return new Response(body, {
+    headers: { "Content-Type": "application/json" },
+  });
 });
 
-server.listen(port, hostname, () => {
-  console.log(`Service running on port ${port}`);
-});
-
-process.on('SIGINT', () => {
-  console.log('Received SIGINT');
-  process.exit();
-});
-
-process.on('SIGTERM', () => {
-  console.log('Received SIGTERM');
-  process.exit();
-});
+console.log(`middle-service running on port ${port}`);

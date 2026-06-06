@@ -1,0 +1,59 @@
+# Declarative (db-less) configuration for the the-middleman playground.
+# Loaded by Kong at boot via KONG_DECLARATIVE_CONFIG. This file IS the
+# configuration — edit it and `docker-compose restart playground-kong`
+# (or run ./reload.sh) to re-apply.
+#
+# Two scenarios coexist, both backed by the same destination service and the
+# same Redis, isolated by Redis database:
+#   /cache-host    -> cache keyed by host   (redis database 0)
+#   /cache-header  -> cache keyed by the `authorization` header (redis database 1)
+_format_version: "3.0"
+
+services:
+  - name: destination-service
+    url: http://playground-destination-service:3200
+    routes:
+      - name: cache-host
+        paths:
+          - /cache-host
+        plugins:
+          - name: the-middleman
+            config:
+              url: http://playground-middle-service:3400
+              path: /
+              method: POST
+              forward_headers: true
+              cache_enabled: true
+              cache_based_on: host
+              cache_invalidate_when_streamup_path:
+                - /cache-host/invalidate
+              cache_ttl: 60
+              cache_policy: redis
+              redis:
+                host: playground-redis
+                port: 6379
+                timeout: 2000
+                database: 0
+
+      - name: cache-header
+        paths:
+          - /cache-header
+        plugins:
+          - name: the-middleman
+            config:
+              url: http://playground-middle-service:3400
+              path: /
+              method: POST
+              forward_headers: true
+              cache_enabled: true
+              cache_based_on: header
+              cache_based_on_headers: authorization
+              cache_invalidate_when_streamup_path:
+                - /cache-header/invalidate
+              cache_ttl: 60
+              cache_policy: redis
+              redis:
+                host: playground-redis
+                port: 6379
+                timeout: 2000
+                database: 1

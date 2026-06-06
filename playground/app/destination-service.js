@@ -1,34 +1,30 @@
-const http = require('http');
+// Destination service — the real upstream behind Kong in the playground.
+//
+// It echoes back, in the response body, every `x-*` header it received. Those
+// headers are the ones the-middleman injected (x-tenant-id, x-role,
+// x-account-id) plus x-middleman-cache-status. The test scripts grep this body
+// to assert the plugin behaviour.
+//
+// Runs on Deno (Deno.serve). No external dependencies.
 
-const hostname = '0.0.0.0';
-const port = process.env.PORT || 3000;
+const port = Number(Deno.env.get("PORT") ?? "3000");
 
-const server = http.createServer((req, res) => {
-  res.statusCode = 200;
-  res.setHeader('Content-Type', 'text/plain');
+Deno.serve({ port, hostname: "0.0.0.0" }, (req) => {
+  let body =
+    "I'm the destination service. These are the x-headers added by the-middleman that I can see:\n\n";
 
-  let body = 'I\'m the destination service. These are the x-headers added by the-middleman that I can see:\n\n';
+  // Deno's Headers iterator yields lowercased header names.
+  for (const [name, value] of req.headers) {
+    if (name.startsWith("x-")) {
+      body += `${name}: ${value}\n`;
+    }
+  }
 
-  Object.keys(req.headers)
-    .filter(e => e.startsWith('x-'))
-    .forEach(e => { body += `${e}: ${req.headers[e]}\n` });
+  body += `\n@timestamp: ${new Date().toISOString()}`;
 
-  body += '\n';
-  body += `@timestamp: ${(new Date()).toISOString()}`;
-
-  res.end(body);
+  return new Response(body, {
+    headers: { "Content-Type": "text/plain" },
+  });
 });
 
-server.listen(port, hostname, () => {
-  console.log(`Service running on port ${port}`);
-});
-
-process.on('SIGINT', () => {
-  console.log('Received SIGINT');
-  process.exit();
-});
-
-process.on('SIGTERM', () => {
-  console.log('Received SIGTERM');
-  process.exit();
-});
+console.log(`destination-service running on port ${port}`);
