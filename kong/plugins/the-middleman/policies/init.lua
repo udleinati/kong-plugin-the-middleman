@@ -6,30 +6,54 @@ local fmt = string.format
 local redis_prefix = 'kong:the-middleman:'
 
 local function is_present(str)
-  return str and str ~= "" and str ~= null
+  return str ~= nil and str ~= "" and str ~= ngx.null
 end
 
-local sock_opts = {}
+-- Build the namespaced Redis key, optionally scoped by username.
+local function redis_key(conf, key)
+  local username_scope = is_present(conf.redis_username)
+    and (conf.redis_username .. '::')
+    or ''
+  return username_scope .. redis_prefix .. key
+end
+
+-- Guard helper shared by every policy entry point.
+local function assert_string_key(key)
+  if type(key) ~= "string" then
+    error("key must be a string", 3)
+  end
+end
+
+local function release_redis_connection(red)
+  local ok, err = red:set_keepalive(10000, 100)
+  if not ok then
+    kong.log.err("failed to set Redis keepalive: ", err)
+  end
+end
 
 local function get_redis_connection(conf)
   local red = redis:new()
   red:set_timeout(conf.redis_timeout)
 
-  sock_opts.ssl = conf.redis_ssl
-  sock_opts.ssl_verify = conf.redis_ssl_verify
-  sock_opts.server_name = conf.redis_server_name
+  -- `sock_opts` is intentionally a per-call local: a module-level table would
+  -- be shared across concurrent requests and could be clobbered when different
+  -- routes use different Redis configs.
+  local sock_opts = {
+    ssl = conf.redis_ssl,
+    ssl_verify = conf.redis_ssl_verify,
+    server_name = conf.redis_server_name,
+  }
 
   -- use a special pool name only if redis_database is set to non-zero
   -- otherwise use the default pool name host:port
   if conf.redis_database ~= 0 then
-    sock_opts.pool = fmt( "%s:%d;%d",
-                          conf.redis_host,
-                          conf.redis_port,
-                          conf.redis_database)
+    sock_opts.pool = fmt("%s:%d;%d",
+                         conf.redis_host,
+                         conf.redis_port,
+                         conf.redis_database)
   end
 
-  local ok, err = red:connect(conf.redis_host, conf.redis_port,
-                              sock_opts)
+  local ok, err = red:connect(conf.redis_host, conf.redis_port, sock_opts)
   if not ok then
     kong.log.err("failed to connect to Redis: ", err)
     return nil, err
@@ -73,12 +97,10 @@ end
 return {
   ["local"] = {
     set = function(conf, key, value, opts)
-      if type(key) ~= "string" then
-          error("key must be a string", 2)
-      end
+      assert_string_key(key)
 
-      local cacheCb = function(_value)
-        return _value;
+      local cacheCb = function(cached)
+        return cached
       end
 
       local response, err = kong.cache:get(key, opts, cacheCb, value)
@@ -90,11 +112,9 @@ return {
       return response
     end,
     probe = function(conf, key)
-      if type(key) ~= "string" then
-          error("key must be a string", 2)
-      end
+      assert_string_key(key)
 
-      local ttl, err, response = kong.cache:probe(key)
+      local _, err, response = kong.cache:probe(key)
 
       if err then
         return nil, err
@@ -103,11 +123,9 @@ return {
       return response
     end,
     invalidate = function(conf, key)
-      if type(key) ~= "string" then
-          error("key must be a string", 2)
-      end
+      assert_string_key(key)
 
-      local ok, err = kong.cache:invalidate(key)
+      local _, err = kong.cache:invalidate(key)
 
       if err then
         return nil, err
@@ -118,9 +136,7 @@ return {
   },
   ["redis"] = {
     set = function(conf, key, value, opts)
-      if type(key) ~= "string" then
-          error("key must be a string", 2)
-      end
+      assert_string_key(key)
 
       local red, err = get_redis_connection(conf)
       if not red then
@@ -135,23 +151,18 @@ return {
         redis.call("set", cache_key, cache_value)
         redis.call("expire", cache_key, expiration)
         return true
-      ]], 1, (conf.redis_username and conf.redis_username .. '::' or '') .. redis_prefix .. key, cjson.encode(value), opts.ttl)
+      ]], 1, redis_key(conf, key), cjson.encode(value), opts.ttl)
 
       if err then
         return nil, err
       end
 
-      local ok, err = red:set_keepalive(10000, 100)
-      if not ok then
-        kong.log.err("failed to set Redis keepalive: ", err)
-      end
+      release_redis_connection(red)
 
       return response
     end,
     probe = function(conf, key)
-      if type(key) ~= "string" then
-          error("key must be a string", 2)
-      end
+      assert_string_key(key)
 
       local red, err = get_redis_connection(conf)
       if not red then
@@ -160,15 +171,12 @@ return {
 
       reports.retrieve_redis_version(red)
 
-      local response, err = red:get((conf.redis_username and conf.redis_username .. '::' or '') .. redis_prefix .. key)
+      local response, err = red:get(redis_key(conf, key))
       if err then
         return nil, err
       end
 
-      local ok, err = red:set_keepalive(10000, 100)
-      if not ok then
-        kong.log.err("failed to set Redis keepalive: ", err)
-      end
+      release_redis_connection(red)
 
       if response == ngx.null then
         return nil
@@ -177,9 +185,7 @@ return {
       end
     end,
     invalidate = function(conf, key)
-      if type(key) ~= "string" then
-          error("key must be a string", 2)
-      end
+      assert_string_key(key)
 
       local red, err = get_redis_connection(conf)
       if not red then
@@ -188,15 +194,12 @@ return {
 
       reports.retrieve_redis_version(red)
 
-      local response, err = red:del((conf.redis_username and conf.redis_username .. '::' or '') .. redis_prefix .. key)
+      local _, err = red:del(redis_key(conf, key))
       if err then
         return nil, err
       end
 
-      local ok, err = red:set_keepalive(10000, 100)
-      if not ok then
-        kong.log.err("failed to set Redis keepalive: ", err)
-      end
+      release_redis_connection(red)
 
       return true
     end

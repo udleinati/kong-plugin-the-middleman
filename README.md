@@ -84,6 +84,31 @@ $ curl -X POST http://kong:8001/apis/{api}/plugins \
 | `config.redis_timeout` | 2000 | |
 | `config.redis_database` | 0 | |
 
+## Development & Testing
+
+The plugin is covered by two test suites under `spec/`:
+
+- `spec/01-unit` — fast, fully-mocked unit tests for every module
+  (`utils`, `access`, `policies`, `handler`). No Kong/network needed.
+- `spec/02-integration` — end-to-end tests that boot a real Kong, validate the
+  schema and exercise the full request flow (header injection, cache HIT/MISS,
+  error passthrough).
+
+Tests run inside [Pongo](https://github.com/Kong/kong-pongo), Kong's official
+test runner (requires Docker). The provided `Makefile` vendors Pongo locally on
+first use:
+
+```bash
+make test                  # luacheck + the whole suite
+make unit                  # only spec/01-unit
+make integration           # only spec/02-integration
+make lint                  # luacheck only
+make test KONG_VERSION=2.8.5   # pin a specific Kong version
+```
+
+CI runs the same suite across several Kong versions (see
+`.github/workflows/test.yml`).
+
 ## Author
 
 Udlei Nati - [GitHub](https://github.com/udleinati "GitHub") - [LinkedIn](https://www.linkedin.com/in/udleinati/ "LinkedIn")

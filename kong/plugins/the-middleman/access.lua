@@ -1,38 +1,72 @@
 local policies = require "kong.plugins.the-middleman.policies"
+local utils = require "kong.plugins.the-middleman.utils"
 
 local _M = {}
 local http = require "resty.http"
 local json = require "cjson"
 
-local str_gsub, str_upper, str_lower = string.gsub, string.upper, string.lower
 local kong = kong
 local error = error
 local md5 = ngx.md5
+local dasherize = utils.dasherize
 
-local function capitalize(str)
-  return (str_gsub(str, '^%l', str_upper))
+local CACHE_STATUS_HEADER = "X-Middleman-Cache-Status"
+
+-- Set the cache-status header on the upstream request and, when configured,
+-- mirror it onto the downstream response.
+local function set_cache_status(conf, status)
+  kong.service.request.set_header(CACHE_STATUS_HEADER, status)
+
+  if conf.streamdown_injected_headers then
+    kong.response.set_header(CACHE_STATUS_HEADER, status)
+  end
 end
 
-local function dasherize(str)
-  local new_str = str_gsub(str, '(%l)(%u)', '%1-%2')
-  new_str = str_gsub(new_str, '%W+', '-')
-  new_str = str_lower(new_str)
-  new_str = str_gsub(new_str, '[^-]+', capitalize)
-  return new_str
+-- Build the (unhashed) cache key based on the configured strategy.
+local function build_cache_key(conf)
+  local cache_based_on = conf.cache_based_on
+
+  if cache_based_on == "host-path" then
+    return kong.request.get_host() .. kong.request.get_path()
+
+  elseif cache_based_on == "host-path-query" then
+    return kong.request.get_host() .. kong.request.get_path_with_query()
+
+  elseif cache_based_on == "header" then
+    -- Use the first present header from the prioritized, comma-separated list.
+    for header_name in (conf.cache_based_on_headers .. ","):gmatch("(.-),") do
+      local header_value = kong.request.get_header(header_name)
+      if header_value then
+        return header_value
+      end
+    end
+    -- No configured header present: fall back to the host so we still cache.
+    return kong.request.get_host()
+  end
+
+  -- default: "host"
+  return kong.request.get_host()
 end
 
-local function external_request(conf, version)
-  -- Check if the cache header must be added
-  if conf.cache_enabled then
-    -- Set Header
-    kong.service.request.set_header('X-Middleman-Cache-Status', 'MISS')
+-- True when the current request path is one of the configured
+-- cache-invalidation paths.
+local function should_invalidate_cache(conf)
+  local paths = conf.cache_invalidate_when_streamup_path
+  if not paths then
+    return false
+  end
 
-    -- stream down the headers
-    if conf.streamdown_injected_headers then
-      kong.response.set_header('X-Middleman-Cache-Status', 'MISS')
+  local request_path = kong.request.get_path()
+  for _, path in ipairs(paths) do
+    if request_path == path then
+      return true
     end
   end
 
+  return false
+end
+
+local function external_request(conf, version)
   local httpc = http.new()
   httpc:set_timeouts(conf.connect_timeout, conf.send_timeout, conf.read_timeout)
 
@@ -68,7 +102,7 @@ local function external_request(conf, version)
   })
 
   if err then
-    return error(err)
+    return nil, err
   end
 
   return { status = response.status, body = response.body, headers = response.headers }
@@ -76,105 +110,86 @@ end
 
 local function inject_body_response_into_header(conf, response)
   if not conf.inject_body_response_into_header then
-    return nil
+    return
   end
 
-  local decoded_body = json.decode(response.body)
+  local ok, decoded_body = pcall(json.decode, response.body)
+  if not ok or type(decoded_body) ~= "table" then
+    kong.log.err("the-middleman: middle-request response body is not valid JSON; skipping header injection")
+    return
+  end
+
   for key, value in pairs(decoded_body) do
-    if not value then goto continue end
+    if value then
+      local header_name = dasherize(conf.injected_header_prefix .. key)
+      local header_value = value
 
-    local header_name = dasherize(conf.injected_header_prefix .. key)
-    local header_value = value
+      if type(header_value) == "table" then
+        header_value = json.encode(header_value)
+      end
 
-    if type(header_value) == "table" then
-      header_value = json.encode(header_value)
+      kong.service.request.set_header(header_name, header_value)
+
+      -- stream down the headers
+      if conf.streamdown_injected_headers then
+        kong.response.set_header(header_name, header_value)
+      end
     end
-
-    kong.service.request.set_header(header_name, header_value)
-
-    -- stream down the headers
-    if conf.streamdown_injected_headers then
-      kong.response.set_header(header_name, header_value)
-    end
-
-    :: continue ::
   end
 end
 
-function _M.execute(conf, version)
-  local response, err;
-
-  if conf.cache_enabled then
-    -- Set Header
-    kong.service.request.set_header('X-Middleman-Cache-Status', 'HIT')
-
-    -- stream down the headers
-    if conf.streamdown_injected_headers then
-      kong.response.set_header('X-Middleman-Cache-Status', 'HIT')
-    end
-
-    local cache_key = kong.request.get_header("host")
-
-    if conf.cache_based_on == "host-path" then
-      cache_key = cache_key .. kong.request.get_path()
-
-    elseif conf.cache_based_on == "host-path-query" then
-      cache_key = cache_key .. kong.request.get_path_with_query()
-
-    elseif conf.cache_based_on == "header" then
-      local cache_based_on_headers = conf.cache_based_on_headers .. ','
-
-      for cache_based_on_header in cache_based_on_headers:gmatch("(.-),") do
-        if kong.request.get_header(cache_based_on_header) then
-          cache_key = kong.request.get_header(cache_based_on_header)
-          break
-        end
-      end
-    end
-
-    local value, err = policies[conf.cache_policy].probe(conf, md5(cache_key))
-
-    if value then
-      response = value
-    else
-      response, err = external_request(conf, version)
-
-      local opts = { ttl = conf.cache_ttl }
-      local cached, err = policies[conf.cache_policy].set(conf, md5(cache_key), response, opts)
-    end
-
-    -- check if the cache must be invalidated
-    local should_invalidate_cache = false
-
-    for k,v in pairs(conf.cache_invalidate_when_streamup_path) do
-      if kong.request.get_path() == v then
-        should_invalidate_cache = true
-        break
-      end
-    end
-
-    if should_invalidate_cache then
-      policies[conf.cache_policy].invalidate(conf, md5(cache_key))
-
-      kong.cache:invalidate(md5(cache_key))
-    end
-  else
-    response, err = external_request(conf, version)
+-- Resolve the middle-request response, going through the cache when enabled.
+local function resolve_response(conf, version)
+  if not conf.cache_enabled then
+    return external_request(conf, version)
   end
+
+  local cache_key = md5(build_cache_key(conf))
+  local invalidate = should_invalidate_cache(conf)
+  local policy = policies[conf.cache_policy]
+
+  local response, err
+  local value = policy.probe(conf, cache_key)
+
+  if value then
+    set_cache_status(conf, "HIT")
+    response = value
+  else
+    set_cache_status(conf, "MISS")
+    response, err = external_request(conf, version)
+    if err then
+      return nil, err
+    end
+
+    -- Skip persisting when we are about to invalidate this key anyway.
+    if not invalidate then
+      policy.set(conf, cache_key, response, { ttl = conf.cache_ttl })
+    end
+  end
+
+  if invalidate then
+    policy.invalidate(conf, cache_key)
+    kong.cache:invalidate(cache_key)
+  end
+
+  return response
+end
+
+function _M.execute(conf, version)
+  local response, err = resolve_response(conf, version)
 
   -- unexpected error
   if err then
     return error(err)
   end
 
-  -- http error
+  -- http error: replay the middle-request status/body/headers to the client
   if response.status >= 400 then
     return kong.response.exit(response.status, response.body, response.headers)
   end
 
   -- inject the body response into the header
   inject_body_response_into_header(conf, response)
-
 end
 
 return _M

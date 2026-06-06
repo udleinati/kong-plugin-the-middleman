@@ -1,0 +1,35 @@
+name: Test
+
+on:
+  push:
+    branches: [master]
+  pull_request:
+
+jobs:
+  test:
+    name: lint + busted (Kong ${{ matrix.kong_version }})
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        kong_version:
+          - "2.8.5"
+          - "3.4.2"
+          - "3.6.1"
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Pongo
+        run: |
+          git clone --depth 1 https://github.com/Kong/kong-pongo.git "$HOME/kong-pongo"
+          echo "$HOME/kong-pongo" >> "$GITHUB_PATH"
+
+      - name: Lint
+        env:
+          KONG_VERSION: ${{ matrix.kong_version }}
+        run: pongo lint
+
+      - name: Run tests
+        env:
+          KONG_VERSION: ${{ matrix.kong_version }}
+        run: pongo run -- --output=gtest

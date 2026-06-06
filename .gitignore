@@ -7,3 +7,11 @@ servroot
 /lua
 /lua_modules
 /.luarocks
+
+# vendored Kong test runner (cloned by `make pongo`)
+/.pongo/kong-pongo
+
+# busted coverage / test artifacts
+luacov.*.out
+luacov.stats.out
+luacov.report.out
