@@ -308,6 +308,16 @@ describe("the-middleman access", function()
         assert.equal("md5(http://middle.test|/auth|t-2)", probed_key(ctx))
       end)
 
+      it("trims whitespace around header names in the prioritized list", function()
+        local ctx = build({ request = { header_values = { ["x-tenant"] = "t-2" } } })
+        ctx.access.execute(default_conf({
+          cache_enabled = true,
+          cache_based_on = "header",
+          cache_based_on_headers = "x-missing, x-tenant",
+        }), VERSION)
+        assert.equal("md5(http://middle.test|/auth|t-2)", probed_key(ctx))
+      end)
+
       it("falls back to host when no configured header is present", function()
         local ctx = build({ request = { host = "api.test", header_values = {} } })
         ctx.access.execute(default_conf({

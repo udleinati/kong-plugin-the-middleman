@@ -113,4 +113,25 @@ describe(PLUGIN_NAME .. ": schema", function()
     assert.equal("127.0.0.1", ok.config.redis.host)
     assert.equal(6380, ok.config.redis.port)
   end)
+
+  -- G1: a non-positive / fractional cache_ttl breaks the redis policy
+  -- (SET ... EX <ttl>), so the schema must reject it up front.
+  it("rejects a non-positive cache_ttl", function()
+    local ok, err = validate({ url = "http://middle.test", cache_ttl = 0 })
+    assert.is_falsy(ok)
+    assert.is_not_nil(err.config.cache_ttl)
+  end)
+
+  it("rejects a fractional cache_ttl", function()
+    local ok, err = validate({ url = "http://middle.test", cache_ttl = 1.5 })
+    assert.is_falsy(ok)
+    assert.is_not_nil(err.config.cache_ttl)
+  end)
+
+  -- G8: a non-positive timeout would reach resty with undefined behaviour.
+  it("rejects a non-positive timeout", function()
+    local ok, err = validate({ url = "http://middle.test", connect_timeout = 0 })
+    assert.is_falsy(ok)
+    assert.is_not_nil(err.config.connect_timeout)
+  end)
 end)

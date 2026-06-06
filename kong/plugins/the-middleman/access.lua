@@ -61,7 +61,8 @@ local function build_cache_key(conf)
 
   elseif cache_based_on == "header" then
     -- Use the first present header from the prioritized, comma-separated list.
-    for header_name in (conf.cache_based_on_headers .. ","):gmatch("(.-),") do
+    -- Whitespace around each name is trimmed so "h1, h2" works like "h1,h2".
+    for header_name in (conf.cache_based_on_headers .. ","):gmatch("%s*(.-)%s*,") do
       local header_value = kong.request.get_header(header_name)
       if header_value then
         return header_value

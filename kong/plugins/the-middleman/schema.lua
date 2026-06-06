@@ -29,9 +29,9 @@ return {
         { url = typedefs.url({ required = true }) },
         { path = { type = "string", default = "/auth", }, },
 
-        { connect_timeout = { type = "number", default = 5000, }, },
-        { send_timeout = { type = "number", default = 10000, }, },
-        { read_timeout = {  type = "number", default = 10000, }, },
+        { connect_timeout = { type = "number", default = 5000, gt = 0, }, },
+        { send_timeout = { type = "number", default = 10000, gt = 0, }, },
+        { read_timeout = {  type = "number", default = 10000, gt = 0, }, },
 
         { forward_path = { type = "boolean", default = false, }, },
         { forward_query = { type = "boolean", default = false, }, },
@@ -47,7 +47,9 @@ return {
         { cache_based_on = { type = "string", default = "host", one_of = { "host", "host-path", "host-path-query", "header" }, }, },
         { cache_based_on_headers = { type = "string", default = "authorization", }, },
         { cache_invalidate_when_streamup_path = { type = "array", elements = { type = "string" } } },
-        { cache_ttl = { type = "number", default = 60, }, },
+        -- Must be a positive integer: the redis policy uses `SET ... EX <ttl>`,
+        -- which rejects 0 / negative / fractional values.
+        { cache_ttl = { type = "integer", default = 60, gt = 0, }, },
 
         -- Shared Kong Redis config record (Kong 3.6+): exposes config.redis.host,
         -- config.redis.port, config.redis.ssl, etc.
