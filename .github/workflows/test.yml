@@ -18,7 +18,7 @@ jobs:
           - "3.8.0"
           - "3.9.2"
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
 
       - name: Install Pongo
         run: |
@@ -28,9 +28,9 @@ jobs:
       - name: Lint
         env:
           KONG_VERSION: ${{ matrix.kong_version }}
-        run: pongo lint
+        run: pongo.sh lint
 
       - name: Run tests
         env:
           KONG_VERSION: ${{ matrix.kong_version }}
-        run: pongo run -- --output=gtest
+        run: pongo.sh run -- --output=gtest
