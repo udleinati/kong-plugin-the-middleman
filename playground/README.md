@@ -12,7 +12,7 @@ The whole configuration lives in a single declarative file: [`kong.yml`](./kong.
 |---|---|---|
 | `playground-kong` | `kong:3.9.2` | The gateway (db-less), with `the-middleman` mounted |
 | `playground-redis` | `redis:8-alpine` | Cache backend for the `redis` policy |
-| `playground-middle-service` | `denoland/deno:2.8.2` | `the-middle-request` target; returns the identity JSON |
+| `playground-middle-service` | `denoland/deno:2.8.2` | `the-middle-request` target; answers identity / deny (`403`) / redirect (`302`) by `config.path`, and can offload `tenantId` from a forwarded header |
 | `playground-destination-service` | `denoland/deno:2.8.2` | Upstream that echoes the injected `x-*` headers |
 
 No PostgreSQL and no migrations: Kong runs in db-less mode
@@ -67,6 +67,37 @@ by `./test-features.sh`:
 > Every cached response also carries `x-middleman-cache-key` (the SHA-256 key) and
 > a `x-middleman-cache-status` of `HIT`/`MISS`/`REFRESH`/`STALE`/`BYPASS`.
 
+## Extended demos
+
+`./test-extended.sh` (also run by `./test.sh`) covers the rest of the plugin
+surface — the `local` policy, path-based keys, the deny/redirect gates, `REFRESH`,
+streamdown and host-offloading:
+
+| Route | Demonstrates |
+|---|---|
+| `/cache-local` | `cache_policy=local` — per-node, in-memory cache (no Redis): `MISS` then `HIT` |
+| `/cache-path` | `cache_based_on=host-path-query` — the query string is part of the key |
+| `/gate-deny` | the middle answers `403` → replayed to the client (deny); the upstream is never reached |
+| `/gate-redirect` | the middle answers `302` → status + `Location` replayed to the client (forward-auth → login) |
+| `/refresh` | `REFRESH` — a stale entry is re-validated against the (still up) middle-service |
+| `/streamdown` | `streamdown_injected_headers` — identity + cache-status mirrored onto the **client** response |
+| `/offload` | host-offloading — `tenantId` is taken from a forwarded `X-Tenant` header; `forward_headers_allow` restricts what's forwarded |
+| `/forward` | `forward_path` / `forward_query` / `forward_body` + a custom `injected_header_prefix` (`X-Echo-`) |
+
+```bash
+./test-extended.sh
+```
+
+```bash
+# a couple of the demos by hand
+curl -s  -o /dev/null -w '%{http_code}\n'  http://localhost:8000/gate-deny       # 403
+curl -s  -D - -o /dev/null                 http://localhost:8000/gate-redirect    # 302 + Location
+curl -s  -H 'X-Tenant: acme'               http://localhost:8000/offload          # x-tenant-id: acme
+```
+
+> The demos that assert a `MISS` use a per-run nonce (a unique host / query /
+> token), so the whole suite is safe to **re-run** within the `cache_ttl` window.
+
 ## Changing the configuration
 
 Edit [`kong.yml`](./kong.yml), then either restart Kong or hot-reload it:
@@ -91,8 +122,9 @@ and proxy (`http://localhost:8000`). They are POSIX sh.
 | `reload.sh` | Re-applies `kong.yml` to a running Kong via `POST /config` (no restart). |
 | `test-host.sh` | Step-by-step test of the host scenario: `MISS → HIT → invalidate → MISS`. |
 | `test-header.sh` | Step-by-step test of the header scenario: `token-1 MISS → HIT`, `token-2 MISS`. |
-| `test.sh` | Runs both test scripts and exits non-zero if anything fails. |
-| `test-features.sh` | Demos the extra cache/forwarding features (see **Feature demos** above) with assertions. |
+| `test-extended.sh` | Demos the extended behaviours (see **Extended demos** above): local policy, path keys, deny/redirect, `REFRESH`, streamdown, offloading. |
+| `test.sh` | Runs the host, header and extended scripts; exits non-zero if anything fails. Safe to re-run. |
+| `test-features.sh` | Demos the extra cache/forwarding features (see **Feature demos** above) with assertions. Stops/starts the middle-service, so run it on its own. |
 
 ### Inspect the configuration
 

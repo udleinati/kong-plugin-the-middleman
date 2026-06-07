@@ -4,9 +4,11 @@
 DIR="$(dirname "$0")"
 fail=0
 
-sh "$DIR/test-host.sh"   || fail=1
+sh "$DIR/test-host.sh"     || fail=1
 echo ""
-sh "$DIR/test-header.sh" || fail=1
+sh "$DIR/test-header.sh"   || fail=1
+echo ""
+sh "$DIR/test-extended.sh" || fail=1
 echo ""
 
 echo "=================================================="
