@@ -1,4 +1,5 @@
 local policies = require "kong.plugins.the-middleman.policies"
+local resolver = require "kong.plugins.the-middleman.resolver"
 local utils = require "kong.plugins.the-middleman.utils"
 
 local _M = {}
@@ -16,6 +17,9 @@ local kong = kong
 local ngx = ngx
 local error = error
 local dasherize = utils.dasherize
+local get_header_ci = utils.get_header_ci
+local parse_cache_control = utils.parse_cache_control
+local EMPTY_CACHE_CONTROL = utils.EMPTY_CACHE_CONTROL
 
 local CACHE_STATUS_HEADER = "X-Middleman-Cache-Status"
 local CACHE_KEY_HEADER = "X-Middleman-Cache-Key"
@@ -30,68 +34,6 @@ local function hash(value)
   local digest = sha256:new()
   digest:update(value)
   return to_hex(digest:final())
-end
-
--- Case-insensitive lookup over a resty.http response-headers table.
-local function get_header_ci(headers, name)
-  if not headers then return nil end
-  name = string.lower(name)
-  for k, v in pairs(headers) do
-    if string.lower(k) == name then
-      return v
-    end
-  end
-  return nil
-end
-
--- Minimal RFC7234 parse for the Cache-Control directives we honour.
-local EMPTY_CACHE_CONTROL = { no_store = false, no_cache = false }
-local function parse_cache_control(header)
-  if not header then
-    return EMPTY_CACHE_CONTROL
-  end
-  if type(header) == "table" then
-    header = table.concat(header, ",")
-  end
-  local cc = { no_store = false, no_cache = false, max_age = nil }
-  for directive in header:gmatch("[^,]+") do
-    directive = string.lower((directive:gsub("%s", "")))
-    if directive == "no-store" then
-      cc.no_store = true
-    elseif directive == "no-cache" then
-      cc.no_cache = true
-    else
-      local age = directive:match("^max%-age=(%d+)$")
-      if age then
-        cc.max_age = tonumber(age)
-      end
-    end
-  end
-  return cc
-end
-
--- True when a cached entry is still within its freshness window. Entries with no
--- deadline (legacy) are treated as fresh; the backend expires them anyway.
-local function is_fresh(value)
-  if not value.fresh_until then
-    return true
-  end
-  return ngx.now() <= value.fresh_until
-end
-
--- Whether a middle-service response status is eligible for caching.
-local function is_cacheable_status(conf, status)
-  local codes = conf.cache_response_codes
-  if codes and #codes > 0 then
-    for _, code in ipairs(codes) do
-      if code == status then
-        return true
-      end
-    end
-    return false
-  end
-  -- Default: cache any non-error response.
-  return status < 400
 end
 
 -- Middle-service response headers that must NOT be replayed verbatim onto the
@@ -117,16 +59,21 @@ local function safe_replay_headers(headers)
   return out
 end
 
+-- The single home for the "inject + maybe streamdown" rule: set a header on the
+-- upstream request and, when streamdown_injected_headers is on, mirror it onto
+-- the client response.
+local function set_injected_header(conf, name, value)
+  kong.service.request.set_header(name, value)
+  if conf.streamdown_injected_headers then
+    kong.response.set_header(name, value)
+  end
+end
+
 -- Set the cache-status + cache-key headers on the upstream request and, when
 -- configured, mirror them onto the downstream response.
 local function set_cache_status(conf, cache_key, status)
-  kong.service.request.set_header(CACHE_STATUS_HEADER, status)
-  kong.service.request.set_header(CACHE_KEY_HEADER, cache_key)
-
-  if conf.streamdown_injected_headers then
-    kong.response.set_header(CACHE_STATUS_HEADER, status)
-    kong.response.set_header(CACHE_KEY_HEADER, cache_key)
-  end
+  set_injected_header(conf, CACHE_STATUS_HEADER, status)
+  set_injected_header(conf, CACHE_KEY_HEADER, cache_key)
 end
 
 -- Build the (unhashed) cache key based on the configured strategy.
@@ -172,6 +119,20 @@ local function should_invalidate_cache(conf)
   end
 
   return false
+end
+
+-- Per-node stampede lock factory injected into the resolver. Hides resty.lock,
+-- the `kong_locks` dict and the key prefix; returns an unlock function on
+-- success or nil to fail open (lock construction or acquisition failed).
+local function make_lock(cache_key)
+  local lock = resty_lock:new("kong_locks")
+  local locked = lock and lock:lock(LOCK_PREFIX .. cache_key)
+  if not locked then
+    return nil
+  end
+  return function()
+    lock:unlock()
+  end
 end
 
 local function external_request(conf, version)
@@ -253,12 +214,7 @@ local function inject_body_response_into_header(conf, response)
         header_value = tostring(header_value)
       end
 
-      kong.service.request.set_header(header_name, header_value)
-
-      -- stream down the headers
-      if conf.streamdown_injected_headers then
-        kong.response.set_header(header_name, header_value)
-      end
+      set_injected_header(conf, header_name, header_value)
     end
   end
 end
@@ -273,48 +229,14 @@ local function forward_response_headers(conf, response)
   for _, name in ipairs(names) do
     local value = get_header_ci(response.headers, name)
     if value ~= nil then
-      kong.service.request.set_header(name, value)
-      if conf.streamdown_injected_headers then
-        kong.response.set_header(name, value)
-      end
+      set_injected_header(conf, name, value)
     end
   end
 end
 
--- Persist a fresh response, honouring the cacheable-status list and (optionally)
--- Cache-Control. `fresh_until` marks the freshness window; the backend TTL can
--- be longer (cache_storage_ttl) so a stale copy survives for serve-on-error.
-local function store_response(conf, policy, cache_key, response, req_no_store)
-  if req_no_store or not is_cacheable_status(conf, response.status) then
-    return
-  end
-
-  local resp_cc = conf.cache_control
-    and parse_cache_control(get_header_ci(response.headers, "cache-control"))
-    or EMPTY_CACHE_CONTROL
-  if resp_cc.no_store then
-    return
-  end
-
-  local fresh_ttl = conf.cache_ttl
-  if conf.cache_control and resp_cc.max_age then
-    fresh_ttl = resp_cc.max_age
-  end
-  if fresh_ttl <= 0 then
-    return
-  end
-
-  local store_ttl = fresh_ttl
-  if conf.cache_storage_ttl and conf.cache_storage_ttl > fresh_ttl then
-    store_ttl = conf.cache_storage_ttl
-  end
-
-  response.fresh_until = ngx.now() + fresh_ttl
-  policy.set(conf, cache_key, response, { ttl = store_ttl })
-end
-
--- Resolve the middle-request response, going through the cache when enabled.
-local function resolve_response(conf, version)
+-- Resolve the middle-request, through the cache when enabled, and report the
+-- resulting cache-status. Returns the same (response, err) contract regardless.
+local function resolve(conf, version)
   if not conf.cache_enabled then
     return external_request(conf, version)
   end
@@ -324,85 +246,34 @@ local function resolve_response(conf, version)
   -- leak one route's response into another). The same endpoint still shares a
   -- key, which is what cross-route invalidation relies on.
   local cache_key = hash(conf.url .. "|" .. (conf.path or "") .. "|" .. build_cache_key(conf))
-  local invalidate = should_invalidate_cache(conf)
-  local policy = policies[conf.cache_policy]
 
   local req_cc = conf.cache_control
     and parse_cache_control(kong.request.get_header("cache-control"))
     or EMPTY_CACHE_CONTROL
-  local skip_read = req_cc.no_cache or req_cc.no_store
 
-  -- 1) Serve a fresh cache entry, unless the client forbids reading the cache.
-  local cached, probe_err
-  if not skip_read then
-    cached, probe_err = policy.probe(conf, cache_key)
-  end
-  if cached and is_fresh(cached) then
-    set_cache_status(conf, cache_key, "HIT")
-    if invalidate then policy.invalidate(conf, cache_key) end
-    return cached
-  end
+  local request = {
+    cache_key = cache_key,
+    invalidate = should_invalidate_cache(conf),
+    skip_read = req_cc.no_cache or req_cc.no_store,
+    no_store = req_cc.no_store,
+  }
 
-  -- 2) Cache backend unreachable on the read: fail open, fetch once, no re-touch
-  -- (a second connection would just time out too, doubling outage latency).
-  if probe_err then
-    set_cache_status(conf, cache_key, "MISS")
-    return external_request(conf, version)
-  end
+  local response, status, err = resolver.resolve(conf, request, {
+    policy = policies[conf.cache_policy],
+    fetch = function() return external_request(conf, version) end,
+    lock = make_lock,
+    now = ngx.now,
+  })
 
-  -- 3) We must fetch. Serialize with a per-node lock to avoid a stampede; keep a
-  -- stale `cached` entry (within the storage window) as a fallback on failure.
-  local lock = resty_lock:new("kong_locks")
-  local locked = lock and lock:lock(LOCK_PREFIX .. cache_key)
-
-  if locked and not skip_read then
-    -- A peer may have refreshed the entry while we waited for the lock.
-    local refreshed = policy.probe(conf, cache_key)
-    if refreshed and is_fresh(refreshed) then
-      lock:unlock()
-      set_cache_status(conf, cache_key, "HIT")
-      if invalidate then policy.invalidate(conf, cache_key) end
-      return refreshed
-    end
-    if refreshed then
-      cached = refreshed
-    end
+  if status then
+    set_cache_status(conf, cache_key, status)
   end
 
-  local response, err = external_request(conf, version)
-
-  if err then
-    if locked then lock:unlock() end
-    -- Serve a stale copy if we have one (resilience), else propagate the error.
-    if cached then
-      set_cache_status(conf, cache_key, "STALE")
-      if invalidate then policy.invalidate(conf, cache_key) end
-      return cached
-    end
-    return nil, err
-  end
-
-  local status = (skip_read and "BYPASS") or (cached and "REFRESH") or "MISS"
-  set_cache_status(conf, cache_key, status)
-
-  if not invalidate then
-    store_response(conf, policy, cache_key, response, req_cc.no_store)
-  end
-
-  if locked then
-    lock:unlock()
-  end
-  if invalidate then
-    -- Delegate to the configured policy; the local policy already wraps
-    -- kong.cache:invalidate, the redis policy deletes the key from Redis.
-    policy.invalidate(conf, cache_key)
-  end
-
-  return response
+  return response, err
 end
 
 function _M.execute(conf, version)
-  local response, err = resolve_response(conf, version)
+  local response, err = resolve(conf, version)
 
   -- unexpected error
   if err then
