@@ -26,6 +26,27 @@ and [kong-middleman-plugin](https://github.com/pantsel/kong-middleman-plugin "ko
 
 ## How it works
 
+```mermaid
+sequenceDiagram
+    autonumber
+    participant Client
+    participant Kong as Kong + the-middleman
+    participant Mid as the-middle-request
+    participant Upstream
+
+    Client->>Kong: incoming request
+    Kong->>Mid: forward path / host / headers / body
+    Note right of Kong: on a cache HIT this call is skipped
+    Mid-->>Kong: JSON body + response headers + status
+    alt answer is 4xx or 5xx
+        Kong-->>Client: replay the answer (request denied)
+    else answer is 2xx or 3xx
+        Kong->>Upstream: proxied request + injected x- headers
+        Upstream-->>Kong: response
+        Kong-->>Client: response
+    end
+```
+
 1. A request hits a route that has `the-middleman` enabled.
 2. The plugin resolves `the-middle-request` — from cache when possible, otherwise
    by calling your service (`config.url` + `config.path`).
