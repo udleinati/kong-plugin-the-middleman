@@ -190,6 +190,20 @@ local function external_request(conf, version)
   return { status = response.status, body = response.body, headers = response.headers }
 end
 
+-- A JSON object decodes to a table with string keys; a JSON array decodes to one
+-- with integer keys. Only an object maps to headers: an array would inject
+-- meaningless numbered headers (X-1, X-2, ...), so it is skipped like a scalar.
+local function is_json_array(t)
+  local n = 0
+  for k in pairs(t) do
+    if type(k) ~= "number" then
+      return false
+    end
+    n = n + 1
+  end
+  return n > 0
+end
+
 local function inject_body_response_into_header(conf, response)
   if not conf.inject_body_response_into_header then
     return
@@ -198,6 +212,11 @@ local function inject_body_response_into_header(conf, response)
   local ok, decoded_body = pcall(json.decode, response.body)
   if not ok or type(decoded_body) ~= "table" then
     kong.log.err("the-middleman: middle-request response body is not valid JSON; skipping header injection")
+    return
+  end
+
+  if is_json_array(decoded_body) then
+    kong.log.err("the-middleman: middle-request response body is a JSON array, not an object; skipping header injection")
     return
   end
 
@@ -280,8 +299,11 @@ function _M.execute(conf, version)
     return error(err)
   end
 
-  -- http error: replay the middle-request status/body/headers to the client
-  if response.status >= 400 then
+  -- Non-2xx: replay the middle-request status/body/headers to the client. A 3xx
+  -- is the middle-service redirecting the caller (forward-auth -> login); a
+  -- >= 400 is a deny. Both must be returned (preserving e.g. Location), never run
+  -- through injection and proxied upstream.
+  if response.status >= 300 then
     return kong.response.exit(response.status, response.body, safe_replay_headers(response.headers))
   end
 

@@ -13,7 +13,8 @@ For every incoming request, `the-middleman` can:
 
 - **Forward** the `path`, `host`, `query`, `headers` and/or `body` to your service.
 - **Gate** the request — a `>= 400` answer from your service is replayed to the
-  client (deny); anything `< 400` proceeds.
+  client (deny) and a `3xx` is replayed as a redirect (e.g. forward-auth → login);
+  only a `2xx` proceeds.
 - **Inject** your service's JSON response (and/or named response headers) onto the
   upstream request as `x-…` headers, so the destination service can just trust them.
 - **Cache** the middle-request (in-memory `local` or shared `redis`) with a
@@ -41,10 +42,11 @@ headers.*
 1. A request hits a route that has `the-middleman` enabled.
 2. The plugin resolves `the-middle-request` — from cache when possible, otherwise
    by calling your service (`config.url` + `config.path`).
-3. If the service answers `>= 400`, that status/body is returned to the client and
-   the upstream is never reached (request denied).
-4. Otherwise the service's JSON body (and any `forward_response_headers`) are
-   injected onto the upstream request as headers.
+3. If the service answers non-`2xx`, that status/body/headers is returned to the
+   client and the upstream is never reached (a `>= 400` denies; a `3xx` redirects,
+   preserving e.g. `Location`).
+4. Otherwise (a `2xx`) the service's JSON body (and any `forward_response_headers`)
+   are injected onto the upstream request as headers.
 5. Kong proxies to the real upstream, which can rely on the injected headers.
 
 ## Installation

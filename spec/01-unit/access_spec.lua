@@ -217,6 +217,20 @@ describe("the-middleman access", function()
       end)
       assert.is_true(#ctx.recorded.logs > 0)
     end)
+
+    it("does not inject numbered headers from a JSON array body", function()
+      -- A JSON array decodes to integer keys; injecting it would produce
+      -- meaningless X-1/X-2 headers, so it must be skipped like invalid JSON.
+      local ctx = build({
+        http_response = { status = 200, body = '["a","b"]', headers = {} },
+      })
+      assert.has_no.errors(function()
+        ctx.access.execute(default_conf(), VERSION)
+      end)
+      assert.is_nil(ctx.recorded.upstream_headers["X-1"])
+      assert.is_nil(ctx.recorded.upstream_headers["X-2"])
+      assert.is_true(#ctx.recorded.logs > 0)
+    end)
   end)
 
   describe("upstream error responses", function()
@@ -247,6 +261,22 @@ describe("the-middleman access", function()
       assert.is_nil(ctx.recorded.exit.headers["Content-Length"])
       assert.is_nil(ctx.recorded.exit.headers["Transfer-Encoding"])
       assert.equal("v", ctx.recorded.exit.headers["X-Keep"])
+    end)
+  end)
+
+  describe("redirect responses", function()
+    it("replays a 3xx to the client instead of proxying upstream", function()
+      -- A 3xx is the middle-service redirecting the caller (forward-auth ->
+      -- login). It must be replayed with its Location, not run through injection
+      -- and proxied upstream (which silently drops the redirect).
+      local ctx = build({
+        http_response = { status = 302, body = "", headers = { ["Location"] = "/login" } },
+      })
+      ctx.access.execute(default_conf(), VERSION)
+
+      assert.equal(302, ctx.recorded.exit.status)
+      assert.equal("/login", ctx.recorded.exit.headers["Location"])
+      assert.is_nil(ctx.recorded.upstream_headers["X-Role"])
     end)
   end)
 

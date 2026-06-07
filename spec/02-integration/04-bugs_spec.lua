@@ -50,6 +50,8 @@ for _, strategy in helpers.each_strategy() do
       middle_mock("/__mid_b", 200, '{"tenantId":"BBB"}')          -- Bug 2
       middle_mock("/__mid_null", 200, '{"value":null}')           -- Bug 3
       middle_mock("/__mid_false", 200, '{"isAdmin":false}')       -- Bug 4
+      middle_mock("/__mid_302", 302, '{"go":"login"}')            -- Bug 5
+      middle_mock("/__mid_array", 200, '["a","b"]')               -- Bug 6
 
       local middle_url = "http://" .. helpers.get_proxy_ip(false) .. ":" .. helpers.get_proxy_port(false)
 
@@ -89,6 +91,12 @@ for _, strategy in helpers.each_strategy() do
 
       -- Bug 4: a boolean false must be injected, not silently dropped.
       protected("/bug-false", { path = "/__mid_false", method = "POST" })
+
+      -- Bug 5: a 3xx from the middle-service is replayed, not proxied upstream.
+      protected("/bug-redirect", { path = "/__mid_302", method = "POST" })
+
+      -- Bug 6: a JSON array body must not inject numbered headers.
+      protected("/bug-array", { path = "/__mid_array", method = "POST" })
 
       assert(helpers.start_kong({
         database = strategy,
@@ -167,6 +175,26 @@ for _, strategy in helpers.each_strategy() do
 
       assert.equal("false", json.headers["x-is-admin"],
         "a false field must be injected, not silently dropped")
+    end)
+
+    -- Bug 5 -----------------------------------------------------------------
+    it("replays a 3xx redirect to the client instead of proxying upstream", function()
+      -- Why: a 3xx is the middle-service redirecting the caller; proxying upstream
+      -- would silently swallow the redirect. The echo upstream returns 200, so a
+      -- 302 coming back proves the upstream was never reached.
+      local res = proxy_client:get("/bug-redirect", { headers = { host = "redirect.test" } })
+      assert.response(res).has.status(302)
+    end)
+
+    -- Bug 6 -----------------------------------------------------------------
+    it("does NOT inject numbered headers from a JSON array body", function()
+      -- Why: a JSON array decodes to integer keys; injecting it would yield
+      -- meaningless X-1/X-2 headers. The protected upstream must receive none.
+      local res = proxy_client:get("/bug-array", { headers = { host = "array.test" } })
+      assert.response(res).has.status(200)
+      local json = assert.response(res).has.jsonbody()
+      assert.is_nil(json.headers["x-1"])
+      assert.is_nil(json.headers["x-2"])
     end)
   end)
 end
