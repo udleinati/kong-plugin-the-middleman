@@ -1,7 +1,7 @@
 local mocks = require "spec.01-unit.support.mocks"
 local cjson = require "cjson"
 
-local VERSION = "1.1.1"
+local VERSION = "2.0.0"
 local CACHE_HEADER = "X-Middleman-Cache-Status"
 
 -- A config with the schema defaults; specs override what they exercise.

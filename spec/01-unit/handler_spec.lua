@@ -27,7 +27,7 @@ describe("the-middleman handler", function()
 
   it("reports a version that matches the rockspec", function()
     local handler = build()
-    assert.equal("1.1.1", handler.VERSION)
+    assert.equal("2.0.0", handler.VERSION)
   end)
 
   it("delegates :access() to access.execute with the conf and version", function()
