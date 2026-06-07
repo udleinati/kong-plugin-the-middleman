@@ -1,0 +1,252 @@
+# Declarative (db-less) configuration for the the-middleman playground.
+# Loaded by Kong at boot via KONG_DECLARATIVE_CONFIG. This file IS the
+# configuration — edit it and `docker-compose restart playground-kong`
+# (or run ./reload.sh) to re-apply.
+#
+# Two scenarios coexist, both backed by the same destination service and the
+# same Redis, isolated by Redis database:
+#   /cache-host    -> cache keyed by host   (redis database 0)
+#   /cache-header  -> cache keyed by the `authorization` header (redis database 1)
+_format_version: "3.0"
+
+services:
+  - name: destination-service
+    url: http://playground-destination-service:3200
+    routes:
+      - name: cache-host
+        paths:
+          - /cache-host
+        plugins:
+          - name: the-middleman
+            config:
+              url: http://playground-middle-service:3400
+              path: /
+              method: POST
+              forward_headers: true
+              cache_enabled: true
+              cache_based_on: host
+              cache_invalidate_when_streamup_path:
+                - /cache-host/invalidate
+              cache_ttl: 60
+              cache_policy: redis
+              redis:
+                host: playground-redis
+                port: 6379
+                timeout: 2000
+                database: 0
+
+      - name: cache-header
+        paths:
+          - /cache-header
+        plugins:
+          - name: the-middleman
+            config:
+              url: http://playground-middle-service:3400
+              path: /
+              method: POST
+              forward_headers: true
+              cache_enabled: true
+              cache_based_on: header
+              cache_based_on_headers: authorization
+              cache_invalidate_when_streamup_path:
+                - /cache-header/invalidate
+              cache_ttl: 60
+              cache_policy: redis
+              redis:
+                host: playground-redis
+                port: 6379
+                timeout: 2000
+                database: 1
+
+      # --- feature demos (exercised by ./test-features.sh) ------------------
+
+      # forward_response_headers: the middle-service returns X-Auth-Source, which
+      # the-middleman copies onto the upstream request (no cache needed).
+      - name: feat-respheader
+        paths:
+          - /feat-respheader
+        plugins:
+          - name: the-middleman
+            config:
+              url: http://playground-middle-service:3400
+              path: /
+              method: POST
+              forward_response_headers:
+                - x-auth-source
+
+      # cache_response_codes: the middle replies 200, but only 201 is cacheable
+      # here, so every request is a MISS.
+      - name: feat-codes
+        paths:
+          - /feat-codes
+        plugins:
+          - name: the-middleman
+            config:
+              url: http://playground-middle-service:3400
+              path: /
+              method: POST
+              cache_enabled: true
+              cache_based_on: host
+              cache_response_codes:
+                - 201
+              cache_ttl: 60
+              cache_policy: redis
+              redis: { host: playground-redis, port: 6379, timeout: 2000, database: 5 }
+
+      # cache_control: honour the client's Cache-Control: no-store -> BYPASS.
+      - name: feat-bypass
+        paths:
+          - /feat-bypass
+        plugins:
+          - name: the-middleman
+            config:
+              url: http://playground-middle-service:3400
+              path: /
+              method: POST
+              cache_enabled: true
+              cache_based_on: host
+              cache_control: true
+              cache_ttl: 60
+              cache_policy: redis
+              redis: { host: playground-redis, port: 6379, timeout: 2000, database: 6 }
+
+      # cache_storage_ttl: fresh for 2s, retained for 600s -> a stale copy is
+      # served when the middle-service is down (serve-stale).
+      - name: feat-stale
+        paths:
+          - /feat-stale
+        plugins:
+          - name: the-middleman
+            config:
+              url: http://playground-middle-service:3400
+              path: /
+              method: POST
+              cache_enabled: true
+              cache_based_on: host
+              cache_ttl: 2
+              cache_storage_ttl: 600
+              cache_policy: redis
+              redis: { host: playground-redis, port: 6379, timeout: 2000, database: 7 }
+
+      # --- extended demos (exercised by ./test-extended.sh) -----------------
+
+      # cache_policy=local: per-node, in-memory cache (no Redis). MISS then HIT.
+      - name: cache-local
+        paths:
+          - /cache-local
+        plugins:
+          - name: the-middleman
+            config:
+              url: http://playground-middle-service:3400
+              path: /
+              method: POST
+              cache_enabled: true
+              cache_policy: local
+              cache_based_on: host
+              cache_ttl: 60
+
+      # cache_based_on=host-path-query (local): the key varies with the query, so
+      # ?a=1 and ?a=2 are independent entries.
+      - name: cache-path
+        paths:
+          - /cache-path
+        plugins:
+          - name: the-middleman
+            config:
+              url: http://playground-middle-service:3400
+              path: /
+              method: POST
+              cache_enabled: true
+              cache_policy: local
+              cache_based_on: host-path-query
+              cache_ttl: 60
+
+      # Gate / deny: the middle-service answers 403 (config.path=/deny); the
+      # status/body is replayed to the client and the upstream is never reached.
+      - name: gate-deny
+        paths:
+          - /gate-deny
+        plugins:
+          - name: the-middleman
+            config:
+              url: http://playground-middle-service:3400
+              path: /deny
+              method: POST
+
+      # Redirect: the middle-service answers 302 (config.path=/redirect); the
+      # status + Location are replayed to the client (forward-auth -> login).
+      - name: gate-redirect
+        paths:
+          - /gate-redirect
+        plugins:
+          - name: the-middleman
+            config:
+              url: http://playground-middle-service:3400
+              path: /redirect
+              method: POST
+
+      # REFRESH: cache_ttl=2 but retained for 600s. After the freshness window a
+      # request re-validates against the (still up) middle-service -> REFRESH.
+      - name: refresh
+        paths:
+          - /refresh
+        plugins:
+          - name: the-middleman
+            config:
+              url: http://playground-middle-service:3400
+              path: /
+              method: POST
+              cache_enabled: true
+              cache_policy: redis
+              cache_based_on: host
+              cache_ttl: 2
+              cache_storage_ttl: 600
+              redis: { host: playground-redis, port: 6379, timeout: 2000, database: 8 }
+
+      # streamdown_injected_headers: mirror the injected identity + cache-status
+      # onto the CLIENT response headers (not just the upstream request).
+      - name: streamdown
+        paths:
+          - /streamdown
+        plugins:
+          - name: the-middleman
+            config:
+              url: http://playground-middle-service:3400
+              path: /
+              method: POST
+              streamdown_injected_headers: true
+              cache_enabled: true
+              cache_policy: local
+              cache_based_on: host
+              cache_ttl: 60
+
+      # Host-offloading: identity varies by the forwarded `x-tenant` header;
+      # forward_headers_allow restricts what is forwarded to just that header.
+      - name: offload
+        paths:
+          - /offload
+        plugins:
+          - name: the-middleman
+            config:
+              url: http://playground-middle-service:3400
+              path: /
+              method: POST
+              forward_headers: true
+              forward_headers_allow:
+                - x-tenant
+
+      # forward_path / forward_query / forward_body + a custom injected prefix:
+      # the middle echoes the forwarded path/query, injected as x-echo-* headers.
+      - name: forward
+        paths:
+          - /forward
+        plugins:
+          - name: the-middleman
+            config:
+              url: http://playground-middle-service:3400
+              path: /
+              method: POST
+              forward_path: true
+              forward_query: true
+              forward_body: true
+              injected_header_prefix: "X-Echo-"

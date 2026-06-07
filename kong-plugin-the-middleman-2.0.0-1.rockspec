@@ -1,9 +1,9 @@
 package = "kong-plugin-the-middleman"
-version = "1.1.1-3"
+version = "2.0.0-1"
 
 source = {
   url = "git://github.com/udleinati/kong-plugin-the-middleman",
-  tag = "1.1.1-3",
+  tag = "2.0.0-1",
 }
 
 supported_platforms = {"linux", "macosx"}
@@ -14,9 +14,10 @@ description = {
    license = "MIT"
 }
 
+-- lua-cjson and lua-resty-http ship with Kong; they are intentionally not
+-- pinned here so the plugin uses whatever version the running Kong provides.
 dependencies = {
   "lua >= 5.1",
-  "lua-cjson == 2.1.0.6-1",
   "lua-resty-http >= 0.11",
 }
 
@@ -26,6 +27,7 @@ build = {
       ["kong.plugins.the-middleman.access"] = "kong/plugins/the-middleman/access.lua",
       ["kong.plugins.the-middleman.handler"] = "kong/plugins/the-middleman/handler.lua",
       ["kong.plugins.the-middleman.schema"] = "kong/plugins/the-middleman/schema.lua",
+      ["kong.plugins.the-middleman.utils"] = "kong/plugins/the-middleman/utils.lua",
       ["kong.plugins.the-middleman.policies"] = "kong/plugins/the-middleman/policies/init.lua"
    }
 }

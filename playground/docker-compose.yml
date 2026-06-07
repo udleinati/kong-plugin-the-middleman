@@ -1,80 +1,35 @@
-version: '3.7'
-
 networks:
   playground-net:
     external: false
 
 services:
-  playground-postgres:
-    image: postgres:12
-    environment:
-      POSTGRES_DB: kong
-      POSTGRES_PASSWORD: sql
-    restart: on-failure
-    deploy:
-      restart_policy:
-        condition: on-failure
-    stdin_open: true
-    tty: true
-    networks:
-      - playground-net
-
   playground-redis:
-    image: redis:5-alpine
+    image: redis:8-alpine
     restart: on-failure
-    deploy:
-      restart_policy:
-        condition: on-failure
     networks:
       - playground-net
     ports:
       - "6379:6379/tcp"
 
-  playground-kong-migrations:
-    image: kong:2.8
-    entrypoint:
-      [
-        "sh",
-        "-c",
-        "kong migrations bootstrap && kong migrations up"
-      ]
-    depends_on:
-      - playground-postgres
-    environment:
-      KONG_DATABASE: postgres
-      KONG_PG_HOST: playground-postgres
-      KONG_PG_USER: postgres
-      KONG_PG_PASSWORD: sql
-      KONG_PG_DATABASE: kong
-    restart: on-failure
-    deploy:
-      restart_policy:
-        condition: on-failure
-    networks:
-      - playground-net
-
+  # Kong in db-less mode: no postgres, no migrations. The configuration comes
+  # from the declarative kong.yml mounted below.
   playground-kong:
-    image: kong:2.8
+    image: kong:3.9.2
     depends_on:
-      - playground-postgres
+      - playground-redis
     environment:
+      KONG_DATABASE: "off"
+      KONG_DECLARATIVE_CONFIG: /kong.yml
       KONG_ADMIN_ACCESS_LOG: /dev/stdout
       KONG_ADMIN_ERROR_LOG: /dev/stderr
       KONG_ADMIN_LISTEN: '0.0.0.0:8001'
-      KONG_DATABASE: postgres
-      KONG_PG_DATABASE: kong
-      KONG_PG_HOST: playground-postgres
-      KONG_PG_USER: postgres
-      KONG_PG_PASSWORD: sql
       KONG_PROXY_ACCESS_LOG: /dev/stdout
       KONG_PROXY_ERROR_LOG: /dev/stderr
-      KONG_PLUGINS: bundled, the-middleman
+      KONG_PLUGINS: bundled,the-middleman
     volumes:
       - ../kong/plugins/the-middleman:/usr/local/share/lua/5.1/kong/plugins/the-middleman:ro
+      - ./kong.yml:/kong.yml:ro
     restart: on-failure
-    deploy:
-      restart_policy:
-        condition: on-failure
     networks:
       - playground-net
     ports:
@@ -82,8 +37,8 @@ services:
       - "127.0.0.1:8001:8001/tcp"
 
   playground-destination-service:
-    image: node:14-alpine
-    entrypoint: [ "node", "/app/destination-service.js" ]
+    image: denoland/deno:2.8.2
+    entrypoint: [ "deno", "run", "--allow-net", "--allow-env", "/app/destination-service.js" ]
     environment:
       PORT: 3200
     volumes:
@@ -94,8 +49,8 @@ services:
       - 3200:3200
 
   playground-middle-service:
-    image: node:14-alpine
-    entrypoint: [ "node", "/app/middle-service.js" ]
+    image: denoland/deno:2.8.2
+    entrypoint: [ "deno", "run", "--allow-net", "--allow-env", "/app/middle-service.js" ]
     environment:
       PORT: 3400
     volumes:
@@ -104,15 +59,3 @@ services:
       - playground-net
     ports:
       - 3400:3400
-
-  playground-load:
-    image: node:14-alpine
-    entrypoint: [ "node", "/app/_load.js" ]
-    volumes:
-      - ./app/_load.js:/app/_load.js:ro
-    restart: on-failure
-    deploy:
-      restart_policy:
-        condition: on-failure
-    networks:
-      - playground-net

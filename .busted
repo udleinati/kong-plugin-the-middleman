@@ -1,0 +1,16 @@
+-- Busted configuration: https://lunarmodules.github.io/busted/
+-- Run a single profile with: `busted --run=unit` / `busted --run=integration`.
+return {
+  default = {
+    verbose = true,
+    coverage = false,
+    output = "utfTerminal",
+    ["auto-insulate"] = true,
+  },
+  unit = {
+    ROOT = { "spec/01-unit" },
+  },
+  integration = {
+    ROOT = { "spec/02-integration" },
+  },
+}

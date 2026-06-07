@@ -30,6 +30,8 @@ ignore = {
 exclude_files = {
     --"spec/fixtures/invalid-module.lua",
     --"spec-old-api/fixtures/invalid-module.lua",
+    ".pongo/**",       -- vendored Kong test runner (see Makefile)
+    "servroot/**",     -- Kong test working directory
 }
 
 

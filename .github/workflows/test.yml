@@ -1,0 +1,36 @@
+name: Test
+
+on:
+  push:
+    branches: [master]
+  pull_request:
+
+jobs:
+  test:
+    name: lint + busted (Kong ${{ matrix.kong_version }})
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        # The plugin relies on kong.tools.redis.schema (Kong 3.6+).
+        kong_version:
+          - "3.6.1"
+          - "3.8.0"
+          - "3.9.2"
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Install Pongo
+        run: |
+          git clone --depth 1 https://github.com/Kong/kong-pongo.git "$HOME/kong-pongo"
+          echo "$HOME/kong-pongo" >> "$GITHUB_PATH"
+
+      - name: Lint
+        env:
+          KONG_VERSION: ${{ matrix.kong_version }}
+        run: pongo.sh lint
+
+      - name: Run tests
+        env:
+          KONG_VERSION: ${{ matrix.kong_version }}
+        run: pongo.sh run -- --output=gtest
