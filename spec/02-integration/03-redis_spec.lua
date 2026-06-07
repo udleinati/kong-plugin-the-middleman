@@ -15,9 +15,15 @@ local MIDDLE_BODY = '{"tenantId":"123","role":"admin"}'
 local MIDDLE_PATH = "/__redis_middle_ok"
 local MIDDLE_URL = "http://" .. helpers.get_proxy_ip(false) .. ":" .. helpers.get_proxy_port(false)
 
--- Mirror the namespacing done in access.lua so we can assert on the exact key.
+local sha256 = require "resty.sha256"
+local to_hex = require("resty.string").to_hex
+
+-- Mirror the namespacing + SHA-256 hashing done in access.lua so we can assert
+-- on the exact key the plugin writes.
 local function cache_key(host)
-  return "kong:the-middleman:" .. ngx.md5(MIDDLE_URL .. "|" .. MIDDLE_PATH .. "|" .. host)
+  local digest = sha256:new()
+  digest:update(MIDDLE_URL .. "|" .. MIDDLE_PATH .. "|" .. host)
+  return "kong:the-middleman:" .. to_hex(digest:final())
 end
 
 local function redis_connect()

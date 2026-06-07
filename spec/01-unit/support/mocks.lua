@@ -8,11 +8,34 @@ local M = {}
 -- ngx
 -- ---------------------------------------------------------------------------
 -- `md5` is wrapped so specs can assert on the *pre-hash* cache key content.
-function M.fake_ngx()
+function M.fake_ngx(opts)
+  opts = opts or {}
   return {
     null = setmetatable({}, { __tostring = function() return "ngx.null" end }),
     md5 = function(str) return "md5(" .. tostring(str) .. ")" end,
+    -- Fixed clock so freshness/stale specs are deterministic (override via opts).
+    now = function() return opts.now or 1000 end,
   }
+end
+
+-- ---------------------------------------------------------------------------
+-- resty.sha256 + resty.string (cache-key hashing)
+-- ---------------------------------------------------------------------------
+-- Wrapped so specs can still assert on the *pre-hash* cache key content:
+-- hash(x) renders to the literal string "sha256(x)".
+function M.fake_sha256()
+  return {
+    new = function()
+      local digest = { _buf = "" }
+      function digest:update(s) self._buf = self._buf .. s end
+      function digest:final() return self._buf end
+      return digest
+    end,
+  }
+end
+
+function M.fake_resty_string()
+  return { to_hex = function(bin) return "sha256(" .. bin .. ")" end }
 end
 
 -- ---------------------------------------------------------------------------

@@ -26,6 +26,11 @@ local function default_conf(overrides)
     cache_based_on_headers = "authorization",
     cache_invalidate_when_streamup_path = {},
     cache_ttl = 60,
+    cache_response_codes = {},
+    cache_storage_ttl = 0,
+    cache_control = false,
+    forward_headers_allow = {},
+    forward_response_headers = {},
   }
   for k, v in pairs(overrides or {}) do
     conf[k] = v
@@ -36,7 +41,7 @@ end
 -- Build a fully-mocked access module plus handles to assert against.
 local function build(opts)
   opts = opts or {}
-  local ngx_mock = mocks.fake_ngx()
+  local ngx_mock = mocks.fake_ngx({ now = opts.now })
   local kong_mock, recorded = mocks.fake_kong({ request = opts.request })
   local http_module, http_client = mocks.fake_http_module()
   local policies, policy_calls, policy_state = mocks.fake_policies()
@@ -54,6 +59,8 @@ local function build(opts)
     packages = {
       ["resty.http"] = http_module,
       ["resty.lock"] = lock_module,
+      ["resty.sha256"] = mocks.fake_sha256(),
+      ["resty.string"] = mocks.fake_resty_string(),
       ["kong.plugins.the-middleman.policies"] = policies,
     },
   })
@@ -288,19 +295,19 @@ describe("the-middleman access", function()
       it("uses the host by default", function()
         local ctx = build({ request = { host = "api.test" } })
         ctx.access.execute(default_conf({ cache_enabled = true, cache_based_on = "host" }), VERSION)
-        assert.equal("md5(http://middle.test|/auth|api.test)", probed_key(ctx))
+        assert.equal("sha256(http://middle.test|/auth|api.test)", probed_key(ctx))
       end)
 
       it("uses host + path", function()
         local ctx = build({ request = { host = "api.test", path = "/x" } })
         ctx.access.execute(default_conf({ cache_enabled = true, cache_based_on = "host-path" }), VERSION)
-        assert.equal("md5(http://middle.test|/auth|api.test/x)", probed_key(ctx))
+        assert.equal("sha256(http://middle.test|/auth|api.test/x)", probed_key(ctx))
       end)
 
       it("uses host + path + query", function()
         local ctx = build({ request = { host = "api.test", path_with_query = "/x?a=1" } })
         ctx.access.execute(default_conf({ cache_enabled = true, cache_based_on = "host-path-query" }), VERSION)
-        assert.equal("md5(http://middle.test|/auth|api.test/x?a=1)", probed_key(ctx))
+        assert.equal("sha256(http://middle.test|/auth|api.test/x?a=1)", probed_key(ctx))
       end)
 
       it("uses the first present header from the prioritized list", function()
@@ -310,7 +317,7 @@ describe("the-middleman access", function()
           cache_based_on = "header",
           cache_based_on_headers = "x-missing,x-tenant",
         }), VERSION)
-        assert.equal("md5(http://middle.test|/auth|t-2)", probed_key(ctx))
+        assert.equal("sha256(http://middle.test|/auth|t-2)", probed_key(ctx))
       end)
 
       it("trims whitespace around header names in the prioritized list", function()
@@ -320,7 +327,7 @@ describe("the-middleman access", function()
           cache_based_on = "header",
           cache_based_on_headers = "x-missing, x-tenant",
         }), VERSION)
-        assert.equal("md5(http://middle.test|/auth|t-2)", probed_key(ctx))
+        assert.equal("sha256(http://middle.test|/auth|t-2)", probed_key(ctx))
       end)
 
       it("falls back to host when no configured header is present", function()
@@ -330,7 +337,7 @@ describe("the-middleman access", function()
           cache_based_on = "header",
           cache_based_on_headers = "authorization",
         }), VERSION)
-        assert.equal("md5(http://middle.test|/auth|api.test)", probed_key(ctx))
+        assert.equal("sha256(http://middle.test|/auth|api.test)", probed_key(ctx))
       end)
     end)
 
@@ -436,6 +443,124 @@ describe("the-middleman access", function()
         assert.equal(0, #ctx.policy_calls.set, "must not write to a down backend")
         assert.equal(0, #ctx.lock.locked, "no lock attempt when the backend is down")
       end)
+    end)
+  end)
+
+  describe("response codes, headers and cache-control", function()
+    local CACHE_KEY = "X-Middleman-Cache-Key"
+
+    it("sets the cache-key header alongside the cache status", function()
+      local ctx = build({
+        request = { host = "api.test" },
+        http_response = { status = 200, body = '{"role":"admin"}', headers = {} },
+      })
+      ctx.access.execute(default_conf({ cache_enabled = true, cache_based_on = "host" }), VERSION)
+      assert.equal("sha256(http://middle.test|/auth|api.test)",
+        ctx.recorded.upstream_headers[CACHE_KEY])
+    end)
+
+    it("does not cache a status outside cache_response_codes", function()
+      local ctx = build({
+        http_response = { status = 201, body = '{"role":"admin"}', headers = {} },
+      })
+      ctx.access.execute(default_conf({ cache_enabled = true, cache_response_codes = { 200 } }), VERSION)
+      assert.equal(0, #ctx.policy_calls.set, "201 is not in the cacheable list")
+    end)
+
+    it("caches a status that is in cache_response_codes", function()
+      local ctx = build({
+        http_response = { status = 201, body = '{"role":"admin"}', headers = {} },
+      })
+      ctx.access.execute(default_conf({ cache_enabled = true, cache_response_codes = { 201 } }), VERSION)
+      assert.equal(1, #ctx.policy_calls.set)
+    end)
+
+    it("forwards configured middle-service response headers onto the upstream request", function()
+      local ctx = build({
+        http_response = {
+          status = 200, body = "{}",
+          headers = { ["X-Auth-User"] = "alice", ["X-Other"] = "ignored" },
+        },
+      })
+      ctx.access.execute(default_conf({ forward_response_headers = { "x-auth-user" } }), VERSION)
+      assert.equal("alice", ctx.recorded.upstream_headers["x-auth-user"])
+      assert.is_nil(ctx.recorded.upstream_headers["x-other"])
+    end)
+
+    it("forwards only the allow-listed client headers to the middle-service", function()
+      local ctx = build({ request = { headers = { ["x-a"] = "1", ["x-b"] = "2" } } })
+      ctx.access.execute(default_conf({
+        forward_headers = true,
+        forward_headers_allow = { "x-a" },
+      }), VERSION)
+      local body = cjson.decode(ctx.http.requests[1].params.body)
+      assert.same({ ["x-a"] = "1" }, body.headers)
+    end)
+
+    it("bypasses the cache and does not store on Cache-Control: no-store", function()
+      local ctx = build({
+        request = { host = "api.test", header_values = { ["cache-control"] = "no-store" } },
+        http_response = { status = 200, body = '{"role":"admin"}', headers = {} },
+      })
+      ctx.access.execute(default_conf({ cache_enabled = true, cache_control = true }), VERSION)
+      assert.equal("BYPASS", ctx.recorded.upstream_headers[CACHE_HEADER])
+      assert.equal(0, #ctx.policy_calls.probe, "no-store skips the cache read")
+      assert.equal(0, #ctx.policy_calls.set, "no-store skips the cache write")
+    end)
+
+    it("revalidates on Cache-Control: no-cache even with a cached value", function()
+      local ctx = build({
+        request = { host = "api.test", header_values = { ["cache-control"] = "no-cache" } },
+        probe_return = { status = 200, body = '{"role":"cached"}', headers = {} },
+        http_response = { status = 200, body = '{"role":"fresh"}', headers = {} },
+      })
+      ctx.access.execute(default_conf({ cache_enabled = true, cache_control = true }), VERSION)
+      assert.equal(1, #ctx.http.requests, "no-cache must fetch fresh despite a cached value")
+      assert.equal("BYPASS", ctx.recorded.upstream_headers[CACHE_HEADER])
+      assert.equal("fresh", ctx.recorded.upstream_headers["X-Role"])
+      assert.equal(1, #ctx.policy_calls.set, "no-cache still stores the fresh result")
+    end)
+
+    it("uses the middle-service max-age as the TTL when cache_control is on", function()
+      local ctx = build({
+        request = { host = "api.test" },
+        http_response = { status = 200, body = "{}", headers = { ["Cache-Control"] = "max-age=5" } },
+      })
+      ctx.access.execute(default_conf({ cache_enabled = true, cache_control = true }), VERSION)
+      assert.equal(1, #ctx.policy_calls.set)
+      assert.equal(5, ctx.policy_calls.set[1].opts.ttl)
+    end)
+
+    it("does not cache when the middle-service responds Cache-Control: no-store", function()
+      local ctx = build({
+        request = { host = "api.test" },
+        http_response = { status = 200, body = "{}", headers = { ["Cache-Control"] = "no-store" } },
+      })
+      ctx.access.execute(default_conf({ cache_enabled = true, cache_control = true }), VERSION)
+      assert.equal(0, #ctx.policy_calls.set)
+    end)
+
+    it("serves a stale cached entry when the middle-service fails", function()
+      local ctx = build({
+        request = { host = "api.test" },
+        probe_return = { status = 200, body = '{"role":"stale"}', headers = {}, fresh_until = 1 },
+        http_err = "connection refused",
+      })
+      ctx.access.execute(default_conf({ cache_enabled = true, cache_storage_ttl = 600 }), VERSION)
+      assert.equal("STALE", ctx.recorded.upstream_headers[CACHE_HEADER])
+      assert.equal("stale", ctx.recorded.upstream_headers["X-Role"])
+    end)
+
+    it("refreshes a stale entry when the middle-service succeeds", function()
+      local ctx = build({
+        request = { host = "api.test" },
+        probe_return = { status = 200, body = '{"role":"stale"}', headers = {}, fresh_until = 1 },
+        http_response = { status = 200, body = '{"role":"fresh"}', headers = {} },
+      })
+      ctx.access.execute(default_conf({ cache_enabled = true, cache_storage_ttl = 600 }), VERSION)
+      assert.equal("REFRESH", ctx.recorded.upstream_headers[CACHE_HEADER])
+      assert.equal("fresh", ctx.recorded.upstream_headers["X-Role"])
+      assert.equal(1, #ctx.policy_calls.set, "the refreshed value is re-stored")
     end)
   end)
 end)

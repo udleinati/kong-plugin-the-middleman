@@ -36,10 +36,16 @@ return {
         { forward_path = { type = "boolean", default = false, }, },
         { forward_query = { type = "boolean", default = false, }, },
         { forward_headers = { type = "boolean", default = false, }, },
+        -- When non-empty, restrict the forwarded client headers to these names
+        -- (only applies when forward_headers is true). Empty = forward all.
+        { forward_headers_allow = { type = "array", elements = { type = "string" }, default = {} }, },
         { forward_body = { type = "boolean", default = false, }, },
 
         { inject_body_response_into_header = { type = "boolean", default = true, }, },
         { injected_header_prefix = { type = "string", default = 'X-', }, },
+        -- Middle-service RESPONSE headers to copy onto the upstream request
+        -- (in addition to the JSON-body injection above).
+        { forward_response_headers = { type = "array", elements = { type = "string" }, default = {} }, },
         { streamdown_injected_headers = { type = "boolean", default = false, }, },
 
         { cache_enabled = { type = "boolean", default = false, }, },
@@ -50,6 +56,15 @@ return {
         -- Must be a positive integer: the redis policy uses `SET ... EX <ttl>`,
         -- which rejects 0 / negative / fractional values.
         { cache_ttl = { type = "integer", default = 60, gt = 0, }, },
+        -- Which middle-service response codes are cacheable. Empty = the default
+        -- (any non-error response, i.e. status < 400).
+        { cache_response_codes = { type = "array", elements = { type = "integer", between = { 100, 599 } }, default = {} }, },
+        -- How long (seconds) an entry is retained beyond cache_ttl so a stale copy
+        -- can be served if the middle-service is unreachable. 0 disables this.
+        { cache_storage_ttl = { type = "integer", default = 0, between = { 0, 2147483646 }, }, },
+        -- Honour RFC7234 Cache-Control directives (no-store/no-cache/max-age) from
+        -- the client request and the middle-service response.
+        { cache_control = { type = "boolean", default = false, }, },
 
         -- Shared Kong Redis config record (Kong 3.6+): exposes config.redis.host,
         -- config.redis.port, config.redis.ssl, etc.

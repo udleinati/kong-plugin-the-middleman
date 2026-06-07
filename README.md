@@ -66,14 +66,19 @@ $ curl -X POST http://kong:8001/apis/{api}/plugins \
 | `config.forward_path` | false | Forward the request path to `the-middle-request` body. |
 | `config.forward_query` | false | Forward the request query to `the-middle-request` body. |
 | `config.forward_body` | false | Forward the request body to `the-middle-request` body. |
+| `config.forward_headers_allow` | [] | When set, restrict the forwarded request headers to these names (only applies when `forward_headers` is on). Empty = forward all. |
 | `config.inject_body_response_into_header` | true | Inject `the-middle-request` response into the request header. Note: The response MUST BE a JSON and the property key will be dasherized (kebab-case).  |
 | `config.injected_header_prefix` | X- | Prefix to the injected headers. |
+| `config.forward_response_headers` | [] | Names of `the-middle-request` **response** headers to copy onto the upstream request (auth services often return identity in headers, not the JSON body). |
 | `config.streamdown_injected_headers` | false | When this option is enabled, `the-middleman` will add to the response header all headers added by `the-middleman` and by the middle-service. |
-| `config.cache_enabled` | false | Add cache to `the-middle-request`. When on a header `x-middleman-cache-status` will be added, the value might be *HIT* or *MISS*. |
+| `config.cache_enabled` | false | Add cache to `the-middle-request`. When on, `x-middleman-cache-status` (`HIT`/`MISS`/`REFRESH`/`STALE`/`BYPASS`) and `x-middleman-cache-key` headers are added. |
 | `config.cache_based_on` | host | Allowed values: `host`, `host-path`, `host-path-query` or `header` |
 | `config.cache_based_on_headers` | authorization | The header names that will be used to cache. Valid just when `cache_based_on` is `header`. It is possible to pass more than one header with commma, for example, `header1,header2`, the first header will be prioritized. If it is unavailable, the second one will be cached, and so on. |
 | `config.cache_invalidate_when_streamup_path` | [] | The cache will be invalidate when the request access the `path`. No matter the statuscode that it will return. |
-| `config.cache_ttl` | 60 | TTL |
+| `config.cache_ttl` | 60 | Freshness window (seconds). Must be a positive integer. |
+| `config.cache_response_codes` | [] | Which middle-service response codes are cacheable. Empty = any non-error (`status < 400`). |
+| `config.cache_storage_ttl` | 0 | Seconds an entry is retained **beyond** `cache_ttl` so a stale copy can be served when the middle-service is unreachable. 0 disables serve-stale. |
+| `config.cache_control` | false | Honour RFC7234 `Cache-Control` (`no-store`/`no-cache`/`max-age`) from the client request and the middle-service response. |
 | `config.cache_policy` | local | Allowed values: `local` or `redis` |
 | `config.redis.host` |  | Mandatory when `cache_policy` is `redis`. |
 | `config.redis.port` | 6379 | |

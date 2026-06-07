@@ -5,21 +5,94 @@ local _M = {}
 local http = require "resty.http"
 local json = require "cjson"
 local resty_lock = require "resty.lock"
+local sha256 = require "resty.sha256"
+local to_hex = require("resty.string").to_hex
 
 -- resty.lock keys live in Kong's bundled `kong_locks` shared dict; prefix them
 -- so they can't collide with other users of that dict.
 local LOCK_PREFIX = "the-middleman:"
 
 local kong = kong
+local ngx = ngx
 local error = error
-local md5 = ngx.md5
 local dasherize = utils.dasherize
 
 local CACHE_STATUS_HEADER = "X-Middleman-Cache-Status"
+local CACHE_KEY_HEADER = "X-Middleman-Cache-Key"
 
 -- cjson decodes a JSON `null` to this sentinel (a userdata), which is truthy in
 -- Lua, so it must be checked explicitly before injecting it as a header.
 local JSON_NULL = json.null
+
+-- A SHA-256 hex digest. Resists the collision attacks MD5 is vulnerable to when
+-- the cache key derives from client-controlled input (e.g. a header value).
+local function hash(value)
+  local digest = sha256:new()
+  digest:update(value)
+  return to_hex(digest:final())
+end
+
+-- Case-insensitive lookup over a resty.http response-headers table.
+local function get_header_ci(headers, name)
+  if not headers then return nil end
+  name = string.lower(name)
+  for k, v in pairs(headers) do
+    if string.lower(k) == name then
+      return v
+    end
+  end
+  return nil
+end
+
+-- Minimal RFC7234 parse for the Cache-Control directives we honour.
+local EMPTY_CACHE_CONTROL = { no_store = false, no_cache = false }
+local function parse_cache_control(header)
+  if not header then
+    return EMPTY_CACHE_CONTROL
+  end
+  if type(header) == "table" then
+    header = table.concat(header, ",")
+  end
+  local cc = { no_store = false, no_cache = false, max_age = nil }
+  for directive in header:gmatch("[^,]+") do
+    directive = string.lower((directive:gsub("%s", "")))
+    if directive == "no-store" then
+      cc.no_store = true
+    elseif directive == "no-cache" then
+      cc.no_cache = true
+    else
+      local age = directive:match("^max%-age=(%d+)$")
+      if age then
+        cc.max_age = tonumber(age)
+      end
+    end
+  end
+  return cc
+end
+
+-- True when a cached entry is still within its freshness window. Entries with no
+-- deadline (legacy) are treated as fresh; the backend expires them anyway.
+local function is_fresh(value)
+  if not value.fresh_until then
+    return true
+  end
+  return ngx.now() <= value.fresh_until
+end
+
+-- Whether a middle-service response status is eligible for caching.
+local function is_cacheable_status(conf, status)
+  local codes = conf.cache_response_codes
+  if codes and #codes > 0 then
+    for _, code in ipairs(codes) do
+      if code == status then
+        return true
+      end
+    end
+    return false
+  end
+  -- Default: cache any non-error response.
+  return status < 400
+end
 
 -- Middle-service response headers that must NOT be replayed verbatim onto the
 -- client response: they describe the middle-service's own framing/connection
@@ -44,13 +117,15 @@ local function safe_replay_headers(headers)
   return out
 end
 
--- Set the cache-status header on the upstream request and, when configured,
--- mirror it onto the downstream response.
-local function set_cache_status(conf, status)
+-- Set the cache-status + cache-key headers on the upstream request and, when
+-- configured, mirror them onto the downstream response.
+local function set_cache_status(conf, cache_key, status)
   kong.service.request.set_header(CACHE_STATUS_HEADER, status)
+  kong.service.request.set_header(CACHE_KEY_HEADER, cache_key)
 
   if conf.streamdown_injected_headers then
     kong.response.set_header(CACHE_STATUS_HEADER, status)
+    kong.response.set_header(CACHE_KEY_HEADER, cache_key)
   end
 end
 
@@ -114,7 +189,20 @@ local function external_request(conf, version)
   end
 
   if conf.forward_headers then
-    body["headers"] = kong.request.get_headers()
+    local headers = kong.request.get_headers()
+    local allow = conf.forward_headers_allow
+    if allow and #allow > 0 then
+      -- get_headers() keys are already lower-cased.
+      local filtered = {}
+      for _, name in ipairs(allow) do
+        local lname = string.lower(name)
+        if headers[lname] ~= nil then
+          filtered[lname] = headers[lname]
+        end
+      end
+      headers = filtered
+    end
+    body["headers"] = headers
   end
 
   if conf.forward_body then
@@ -175,20 +263,54 @@ local function inject_body_response_into_header(conf, response)
   end
 end
 
--- Fetch the middle-request and persist it, unless we're invalidating this key
--- or the response is an error (a transient 4xx/5xx must not poison subsequent
--- good requests for the whole TTL).
-local function fetch_and_store(conf, version, policy, cache_key, invalidate)
-  local response, err = external_request(conf, version)
-  if err then
-    return nil, err
+-- Copy the configured middle-service RESPONSE headers onto the upstream request.
+-- Auth services often return identity/credentials as headers, not a JSON body.
+local function forward_response_headers(conf, response)
+  local names = conf.forward_response_headers
+  if not names or #names == 0 then
+    return
+  end
+  for _, name in ipairs(names) do
+    local value = get_header_ci(response.headers, name)
+    if value ~= nil then
+      kong.service.request.set_header(name, value)
+      if conf.streamdown_injected_headers then
+        kong.response.set_header(name, value)
+      end
+    end
+  end
+end
+
+-- Persist a fresh response, honouring the cacheable-status list and (optionally)
+-- Cache-Control. `fresh_until` marks the freshness window; the backend TTL can
+-- be longer (cache_storage_ttl) so a stale copy survives for serve-on-error.
+local function store_response(conf, policy, cache_key, response, req_no_store)
+  if req_no_store or not is_cacheable_status(conf, response.status) then
+    return
   end
 
-  if not invalidate and response.status < 400 then
-    policy.set(conf, cache_key, response, { ttl = conf.cache_ttl })
+  local resp_cc = conf.cache_control
+    and parse_cache_control(get_header_ci(response.headers, "cache-control"))
+    or EMPTY_CACHE_CONTROL
+  if resp_cc.no_store then
+    return
   end
 
-  return response
+  local fresh_ttl = conf.cache_ttl
+  if conf.cache_control and resp_cc.max_age then
+    fresh_ttl = resp_cc.max_age
+  end
+  if fresh_ttl <= 0 then
+    return
+  end
+
+  local store_ttl = fresh_ttl
+  if conf.cache_storage_ttl and conf.cache_storage_ttl > fresh_ttl then
+    store_ttl = conf.cache_storage_ttl
+  end
+
+  response.fresh_until = ngx.now() + fresh_ttl
+  policy.set(conf, cache_key, response, { ttl = store_ttl })
 end
 
 -- Resolve the middle-request response, going through the cache when enabled.
@@ -201,52 +323,75 @@ local function resolve_response(conf, version)
   -- pointing at different middle-services never share a cache entry (which would
   -- leak one route's response into another). The same endpoint still shares a
   -- key, which is what cross-route invalidation relies on.
-  local cache_key = md5(conf.url .. "|" .. (conf.path or "") .. "|" .. build_cache_key(conf))
+  local cache_key = hash(conf.url .. "|" .. (conf.path or "") .. "|" .. build_cache_key(conf))
   local invalidate = should_invalidate_cache(conf)
   local policy = policies[conf.cache_policy]
 
-  local response, err
-  local value, probe_err = policy.probe(conf, cache_key)
+  local req_cc = conf.cache_control
+    and parse_cache_control(kong.request.get_header("cache-control"))
+    or EMPTY_CACHE_CONTROL
+  local skip_read = req_cc.no_cache or req_cc.no_store
 
-  if value then
-    set_cache_status(conf, "HIT")
-    response = value
+  -- 1) Serve a fresh cache entry, unless the client forbids reading the cache.
+  local cached, probe_err
+  if not skip_read then
+    cached, probe_err = policy.probe(conf, cache_key)
+  end
+  if cached and is_fresh(cached) then
+    set_cache_status(conf, cache_key, "HIT")
+    if invalidate then policy.invalidate(conf, cache_key) end
+    return cached
+  end
 
-  elseif probe_err then
-    -- The cache backend is unreachable (e.g. Redis down). Fail open: fetch once
-    -- and do NOT touch the cache again — a second connection would just time out
-    -- too, doubling the latency of every request during the outage.
-    set_cache_status(conf, "MISS")
-    response, err = external_request(conf, version)
-    if err then
-      return nil, err
-    end
+  -- 2) Cache backend unreachable on the read: fail open, fetch once, no re-touch
+  -- (a second connection would just time out too, doubling outage latency).
+  if probe_err then
+    set_cache_status(conf, cache_key, "MISS")
+    return external_request(conf, version)
+  end
 
-  else
-    -- Clean cache MISS. Serialize the fill with a per-node lock so a burst of
-    -- concurrent requests for the same key triggers a single middle-request
-    -- instead of a stampede. Any lock failure is non-fatal (we just fetch).
-    local lock = resty_lock:new("kong_locks")
-    local locked = lock and lock:lock(LOCK_PREFIX .. cache_key)
+  -- 3) We must fetch. Serialize with a per-node lock to avoid a stampede; keep a
+  -- stale `cached` entry (within the storage window) as a fallback on failure.
+  local lock = resty_lock:new("kong_locks")
+  local locked = lock and lock:lock(LOCK_PREFIX .. cache_key)
 
-    -- Re-check under the lock: a peer may have filled the cache while we waited.
-    local filled = locked and policy.probe(conf, cache_key) or nil
-    if filled then
-      set_cache_status(conf, "HIT")
-      response = filled
-    else
-      set_cache_status(conf, "MISS")
-      response, err = fetch_and_store(conf, version, policy, cache_key, invalidate)
-    end
-
-    if locked then
+  if locked and not skip_read then
+    -- A peer may have refreshed the entry while we waited for the lock.
+    local refreshed = policy.probe(conf, cache_key)
+    if refreshed and is_fresh(refreshed) then
       lock:unlock()
+      set_cache_status(conf, cache_key, "HIT")
+      if invalidate then policy.invalidate(conf, cache_key) end
+      return refreshed
     end
-    if err then
-      return nil, err
+    if refreshed then
+      cached = refreshed
     end
   end
 
+  local response, err = external_request(conf, version)
+
+  if err then
+    if locked then lock:unlock() end
+    -- Serve a stale copy if we have one (resilience), else propagate the error.
+    if cached then
+      set_cache_status(conf, cache_key, "STALE")
+      if invalidate then policy.invalidate(conf, cache_key) end
+      return cached
+    end
+    return nil, err
+  end
+
+  local status = (skip_read and "BYPASS") or (cached and "REFRESH") or "MISS"
+  set_cache_status(conf, cache_key, status)
+
+  if not invalidate then
+    store_response(conf, policy, cache_key, response, req_cc.no_store)
+  end
+
+  if locked then
+    lock:unlock()
+  end
   if invalidate then
     -- Delegate to the configured policy; the local policy already wraps
     -- kong.cache:invalidate, the redis policy deletes the key from Redis.
@@ -269,8 +414,10 @@ function _M.execute(conf, version)
     return kong.response.exit(response.status, response.body, safe_replay_headers(response.headers))
   end
 
-  -- inject the body response into the header
+  -- inject the middle-request response (body keys + configured response headers)
+  -- into the upstream request
   inject_body_response_into_header(conf, response)
+  forward_response_headers(conf, response)
 end
 
 return _M
