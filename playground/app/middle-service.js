@@ -21,8 +21,13 @@ Deno.serve({ port, hostname: "0.0.0.0" }, async (req) => {
     accountId: "112233",
   });
 
+  // X-Auth-Source is a sample RESPONSE header; the /feat-respheader route copies
+  // it onto the upstream request via config.forward_response_headers.
   return new Response(body, {
-    headers: { "Content-Type": "application/json" },
+    headers: {
+      "Content-Type": "application/json",
+      "X-Auth-Source": "middle-service",
+    },
   });
 });
 

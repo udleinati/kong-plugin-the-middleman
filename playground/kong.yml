@@ -57,3 +57,73 @@ services:
                 port: 6379
                 timeout: 2000
                 database: 1
+
+      # --- feature demos (exercised by ./test-features.sh) ------------------
+
+      # forward_response_headers: the middle-service returns X-Auth-Source, which
+      # the-middleman copies onto the upstream request (no cache needed).
+      - name: feat-respheader
+        paths:
+          - /feat-respheader
+        plugins:
+          - name: the-middleman
+            config:
+              url: http://playground-middle-service:3400
+              path: /
+              method: POST
+              forward_response_headers:
+                - x-auth-source
+
+      # cache_response_codes: the middle replies 200, but only 201 is cacheable
+      # here, so every request is a MISS.
+      - name: feat-codes
+        paths:
+          - /feat-codes
+        plugins:
+          - name: the-middleman
+            config:
+              url: http://playground-middle-service:3400
+              path: /
+              method: POST
+              cache_enabled: true
+              cache_based_on: host
+              cache_response_codes:
+                - 201
+              cache_ttl: 60
+              cache_policy: redis
+              redis: { host: playground-redis, port: 6379, timeout: 2000, database: 5 }
+
+      # cache_control: honour the client's Cache-Control: no-store -> BYPASS.
+      - name: feat-bypass
+        paths:
+          - /feat-bypass
+        plugins:
+          - name: the-middleman
+            config:
+              url: http://playground-middle-service:3400
+              path: /
+              method: POST
+              cache_enabled: true
+              cache_based_on: host
+              cache_control: true
+              cache_ttl: 60
+              cache_policy: redis
+              redis: { host: playground-redis, port: 6379, timeout: 2000, database: 6 }
+
+      # cache_storage_ttl: fresh for 2s, retained for 600s -> a stale copy is
+      # served when the middle-service is down (serve-stale).
+      - name: feat-stale
+        paths:
+          - /feat-stale
+        plugins:
+          - name: the-middleman
+            config:
+              url: http://playground-middle-service:3400
+              path: /
+              method: POST
+              cache_enabled: true
+              cache_based_on: host
+              cache_ttl: 2
+              cache_storage_ttl: 600
+              cache_policy: redis
+              redis: { host: playground-redis, port: 6379, timeout: 2000, database: 7 }

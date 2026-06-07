@@ -48,6 +48,25 @@ curl -s http://localhost:8000/cache-host        # first call: MISS
 curl -s http://localhost:8000/cache-host        # second call: HIT
 ```
 
+## Feature demos
+
+A few extra routes showcase the richer cache/forwarding options, all validated
+by `./test-features.sh`:
+
+| Route | Demonstrates |
+|---|---|
+| `/feat-respheader` | `forward_response_headers` — copies the middle-service's `X-Auth-Source` response header onto the upstream request |
+| `/feat-codes` | `cache_response_codes` — only `201` is cacheable, so a `200` is never cached |
+| `/feat-bypass` | `cache_control` — `curl -H 'Cache-Control: no-store'` → `BYPASS` |
+| `/feat-stale` | `cache_storage_ttl` — serves a stale copy when the middle-service is down |
+
+```bash
+./test-features.sh
+```
+
+> Every cached response also carries `x-middleman-cache-key` (the SHA-256 key) and
+> a `x-middleman-cache-status` of `HIT`/`MISS`/`REFRESH`/`STALE`/`BYPASS`.
+
 ## Changing the configuration
 
 Edit [`kong.yml`](./kong.yml), then either restart Kong or hot-reload it:
@@ -73,6 +92,7 @@ and proxy (`http://localhost:8000`). They are POSIX sh.
 | `test-host.sh` | Step-by-step test of the host scenario: `MISS → HIT → invalidate → MISS`. |
 | `test-header.sh` | Step-by-step test of the header scenario: `token-1 MISS → HIT`, `token-2 MISS`. |
 | `test.sh` | Runs both test scripts and exits non-zero if anything fails. |
+| `test-features.sh` | Demos the extra cache/forwarding features (see **Feature demos** above) with assertions. |
 
 ### Inspect the configuration
 
